@@ -2,7 +2,7 @@
 import { Routes, Route, useNavigate, useLocation, Navigate } from "react-router-dom";
 import Login from "../Login";
 import Renegociacao, { RENEGOCIACAO_SECTIONS } from "./Renegociacao";
-import Avaliacao from "./Avaliacao";
+import Avaliacao, { AVALIACAO_SECTIONS } from "./Avaliacao";
 import DBICRE from "./DBICRE";
 import Financeiro, { FINANCE_SECTIONS } from "./Financeiro";
 import Prospecao, { PROSPECCAO_SECTIONS } from "./Prospecao";
@@ -381,6 +381,7 @@ function MainApp({ role, onRoleChange, user, onLogout, onSaveUser }) {
     RENEGOCIACAO_SECTIONS[0]?.key || "regras"
   );
   const [financeiroTab, setFinanceiroTab] = useState(FINANCE_SECTIONS[0]?.key || "contas");
+  const [avaliacaoTab, setAvaliacaoTab] = useState(AVALIACAO_SECTIONS[0]?.key || "buscador");
 
   useEffect(() => {
     const nextInvert = themeMode === "dark";
@@ -444,8 +445,9 @@ function MainApp({ role, onRoleChange, user, onLogout, onSaveUser }) {
     if (area === "avaliacao") {
       return {
         title: getAreaLabel("avaliacao"),
-        items: [{ key: "buscador", label: "Buscador de imoveis" }],
-        activeKey: "buscador",
+        items: AVALIACAO_SECTIONS,
+        activeKey: avaliacaoTab,
+        onSelect: setAvaliacaoTab,
       };
     }
 
@@ -458,7 +460,7 @@ function MainApp({ role, onRoleChange, user, onLogout, onSaveUser }) {
     }
 
     return null;
-  }, [area, role, prospeccaoTab, renegociacaoTab, financeiroTab]);
+  }, [area, role, prospeccaoTab, renegociacaoTab, financeiroTab, avaliacaoTab]);
 
   return (
     <div className="app-shell">
@@ -601,7 +603,11 @@ function MainApp({ role, onRoleChange, user, onLogout, onSaveUser }) {
             path="/avaliacao"
             element={
               permissions.areas?.avaliacao ? (
-                <Avaliacao permissions={getAreaPermissions(role, "avaliacao")} />
+                <Avaliacao
+                  permissions={getAreaPermissions(role, "avaliacao")}
+                  activeKey={avaliacaoTab}
+                  onSelect={setAvaliacaoTab}
+                />
               ) : (
                 <AccessDenied
                   areaLabel={getAreaLabel("avaliacao")}

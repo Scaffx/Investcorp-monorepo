@@ -69,6 +69,30 @@ def create_job(request):
 
 
 @require_http_methods(["GET"])
+def job_latest(request):
+    job = ScrapeJob.objects.order_by("-created_at").first()
+    if not job:
+        return JsonResponse({"job": None})
+
+    preview_limit = int(request.GET.get("preview", "20") or 20)
+    preview = []
+    if job.status == "done" and job.result_path:
+        preview = load_preview(job.result_path, limit=preview_limit)
+
+    return JsonResponse({
+        "job_id": job.id,
+        "status": job.status,
+        "created_at": job.created_at.isoformat(),
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "total_rows": job.total_rows,
+        "error_message": job.error_message,
+        "preview": preview,
+        "payload": job.payload or {},
+    })
+
+
+@require_http_methods(["GET"])
 def job_status(request, job_id: int):
     try:
         job = ScrapeJob.objects.get(id=job_id)
@@ -89,6 +113,7 @@ def job_status(request, job_id: int):
         "total_rows": job.total_rows,
         "error_message": job.error_message,
         "preview": preview,
+        "payload": job.payload or {},
     })
 
 
