@@ -1,0 +1,259 @@
+.renegociacao-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.renegociacao-stack-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.renegociacao-rule-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.renegociacao-rule-btn {
+  border-radius: 999px;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  background: rgba(24, 76, 157, 0.06);
+  color: var(--text);
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.renegociacao-rule-btn:hover {
+  background: rgba(24, 76, 157, 0.12);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(24, 76, 157, 0.18);
+}
+
+.renegociacao-rule-btn.is-active {
+  background: rgba(24, 76, 157, 0.18);
+  border-color: rgba(24, 76, 157, 0.4);
+  box-shadow: 0 6px 16px rgba(24, 76, 157, 0.2);
+}
+
+.invert .renegociacao-rule-btn {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.invert .renegociacao-rule-btn.is-active {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.renegociacao-rule-editor {
+  margin-top: 14px;
+}
+
+.renegociacao-rule-title {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.renegociacao-textarea {
+  width: 100%;
+  min-height: 170px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+
+.renegociacao-textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(24, 76, 157, 0.18);
+}
+
+.invert .renegociacao-textarea {
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+}
+
+.renegociacao-actions {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.btn-primary,
+.btn-ghost {
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-weight: 700;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+  box-shadow: 0 8px 18px rgba(24, 76, 157, 0.22);
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(24, 76, 157, 0.25);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: rgba(24, 76, 157, 0.08);
+}
+
+.btn-primary:disabled,
+.btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+.renegociacao-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.renegociacao-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.renegociacao-select,
+.renegociacao-file,
+.renegociacao-input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+}
+
+.renegociacao-select:focus,
+.renegociacao-file:focus,
+.renegociacao-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(24, 76, 157, 0.18);
+}
+
+.invert .renegociacao-select,
+.invert .renegociacao-file,
+.invert .renegociacao-input {
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+}
+
+.renegociacao-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.renegociacao-hint {
+  margin-top: -6px;
+}
+
+.renegociacao-alert {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-weight: 600;
+}
+
+.renegociacao-alert.error {
+  background: #ffecec;
+  border-color: #f5b4b4;
+  color: #9b2c2c;
+}
+
+.renegociacao-alert.success {
+  background: #e9f7ef;
+  border-color: #a7e1c0;
+  color: #1f6f46;
+}
+
+.invert .renegociacao-alert.error {
+  background: rgba(155, 44, 44, 0.2);
+  border-color: rgba(245, 180, 180, 0.4);
+  color: #ffd6d6;
+}
+
+.invert .renegociacao-alert.success {
+  background: rgba(31, 111, 70, 0.2);
+  border-color: rgba(167, 225, 192, 0.4);
+  color: #d7f5e6;
+}
+
+.renegociacao-log {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px dashed var(--border);
+  background: rgba(24, 76, 157, 0.05);
+  color: var(--muted);
+  min-height: 96px;
+}
+
+.invert .renegociacao-log {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.renegociacao-updates {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.renegociacao-update {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(24, 76, 157, 0.04);
+}
+
+.invert .renegociacao-update {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.renegociacao-update-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .renegociacao-update-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
