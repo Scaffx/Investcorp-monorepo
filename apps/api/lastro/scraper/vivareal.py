@@ -440,6 +440,31 @@ def normalize_zona_title(region_title: str, uf_upper: str, state_norm: str) -> s
         return "Central"
     return title
 
+
+def is_zone_like(value: str) -> bool:
+    slug = normalize_slug(value or "")
+    if not slug:
+        return False
+    if slug.startswith("zona-"):
+        return True
+    return slug in ("norte", "sul", "leste", "oeste", "centro", "central")
+
+
+def zone_label(value: str) -> str:
+    slug = normalize_slug(value or "")
+    if not slug:
+        return ""
+    if slug.startswith("zona-"):
+        suffix = slug[len("zona-") :].replace("-", " ").strip()
+        return f"Zona {suffix.title()}" if suffix else ""
+    if slug in ("norte", "sul", "leste", "oeste"):
+        return f"Zona {slug.title()}"
+    if slug == "centro":
+        return "Centro"
+    if slug == "central":
+        return "Central"
+    return ""
+
 def build_url_from_filters(operation: str,
                            state: str,
                            city: str,
@@ -543,68 +568,11 @@ def build_url_from_filters(operation: str,
         if use_street_path:
             path_parts.append(street_slug)
     path_parts.append(property_slug)
-    params.append(("transacao", op))
-    # Parâmetro onde para refinar por bairro/região
-    if has_city and (neighborhood_slug or region_slug):
-        state_display = UF_FULL.get(uf_upper, state_title if state_title else city_title)
-        state_for_query = UF_FULL.get(uf_upper, state_title)
-        if state_for_query and len(state_for_query) <= 2:
-            state_for_query = state_for_query.upper()
-        if has_street:
-            level_type = "street"
-        else:
-            level_type = "neighborhood" if neighborhood_title else ("region" if region_title else "city")
-        state_display_token = onde_display_token(state_display)
-        city_display_token = onde_display_token(city_title)
-        region_display_token = onde_display_token(region_title)
-        neighborhood_display_token = onde_display_token(neighborhood_title)
-        street_display_token = onde_display_token(street_kw)
-        state_trail_token = onde_trail_token(state_display)
-        city_trail_token = onde_trail_token(city_title)
-        region_trail_token = onde_trail_token(region_title)
-        neighborhood_trail_token = onde_trail_token(neighborhood_title)
-        lat, lon = geocode_location(city_title, state_for_query, region_title, neighborhood_title, street_kw)
-        if has_street:
-            onde_parts = [
-                "",  # prefixo vazio exigido pelo site
-                state_display_token,
-                city_display_token,
-                region_display_token,
-                neighborhood_display_token,
-                street_display_token,
-                "",
-                level_type,
-            ]
-        else:
-            onde_parts = [
-                "",  # prefixo vazio exigido pelo site
-                state_display_token,
-                city_display_token,
-                region_display_token,
-                neighborhood_display_token,
-                "",
-                "",
-                level_type,
-            ]
-        trail = f"BR>{state_trail_token}>NULL>{city_trail_token}"
-        if region_trail_token:
-            trail += f">{region_trail_token}"
-        if neighborhood_trail_token:
-            if region_is_zone and is_zone_state:
-                trail += f">{neighborhood_trail_token}"
-            else:
-                trail += ">Barrios"
-                trail += f">{neighborhood_trail_token}"
-        onde_str = ",".join(onde_parts + [trail, lat, lon, ""])
-        params.append(("onde", onde_str))
-    params.append(("tipos", property_slug))
-    # Encode params manually to controlar o encoding do 'onde' (mantendo '>' e '%')
+    # Mantem a URL enxuta para evitar divergencias de resultado entre site e scraper.
+    # O filtro principal fica no caminho (.../estado/cidade/regiao/tipo/).
     encoded_parts = []
     for k, v in params:
-        if k == "onde":
-            encoded_parts.append(f"{k}={quote_plus(str(v), safe='%')}")
-        else:
-            encoded_parts.append(f"{k}={quote_plus(str(v), safe='')}")
+        encoded_parts.append(f"{k}={quote_plus(str(v), safe='')}")
     query = "&".join(encoded_parts)
     path = "/".join(path_parts)
     return f"https://www.vivareal.com.br/{path}/?{query}"
@@ -663,6 +631,13 @@ def _filters_from_url(url: str) -> Optional[dict]:
         "area_max": qv("area_max", "areaMax", "areaMaxima"),
         "logradouro": qv("logradouro", "rua", "street", "palavras-chave", "palavras_chave"),
     }
+
+
+def selected_zone_from_url(url: str) -> str:
+    filters = _filters_from_url(url)
+    if not filters:
+        return ""
+    return zone_label(filters.get("regiao", ""))
 
 def normalize_vivareal_url(url: str) -> str:
     """
@@ -1025,6 +1000,32 @@ def extrai_anuncios_do_soup(soup: BeautifulSoup, log_cb=None) -> list:
             if link and "source=showcase" in link:
                 continue
 
+            # ========= IMAGEM (capa do anuncio) =========
+            image_url = ""
+            for img in card.find_all("img"):
+                src = ""
+                for attr in ("src", "data-src", "data-lazy-src", "data-original"):
+                    candidate = img.get(attr)
+                    if isinstance(candidate, str) and candidate.strip():
+                        src = candidate.strip()
+                        break
+                if not src:
+                    srcset = img.get("srcset") or img.get("data-srcset") or ""
+                    if isinstance(srcset, str) and srcset.strip():
+                        src = srcset.split(",")[0].strip().split(" ")[0].strip()
+                if not src:
+                    continue
+                low_src = src.lower()
+                if low_src.startswith("data:image") or "placeholder" in low_src:
+                    continue
+                if src.startswith("//"):
+                    src = f"https:{src}"
+                elif src.startswith("/"):
+                    src = f"https://www.vivareal.com.br{src}"
+                if src.startswith("http"):
+                    image_url = src
+                    break
+
             # ========= TÍTULO =========
             titulo_elem = card.select_one("h2") or card.select_one(".title") or card.find("h3")
             titulo = titulo_elem.get_text(strip=True) if titulo_elem else ""
@@ -1055,7 +1056,12 @@ def extrai_anuncios_do_soup(soup: BeautifulSoup, log_cb=None) -> list:
             if header_bairro and header_cidade:
                 local_norm = strip_accents_keep(local).lower()
                 header_bairro_norm = strip_accents_keep(header_bairro).lower()
-                if not local or header_bairro_norm not in local_norm:
+                header_is_zone = is_zone_like(header_bairro)
+                # Se o header for apenas zona (ex.: "Zona Sul"), não sobrescreve o bairro
+                # do card; ele será anexado depois no formato "Bairro + Zona".
+                if not local:
+                    local = header_local
+                elif (not header_is_zone) and header_bairro_norm not in local_norm:
                     local = header_local
             elif header_local and (not local or ("," in header_local and "," not in local)):
                 local = header_local
@@ -1245,6 +1251,7 @@ def extrai_anuncios_do_soup(soup: BeautifulSoup, log_cb=None) -> list:
             data = {
                 "Link": link,
                 "Título": titulo,
+                "Imagem URL": image_url,
                 "Local": local,
                 "Rua": rua,
                 "Número": numero,
@@ -1367,6 +1374,7 @@ def run_scrape(
         if normalized_url != url:
             _log(f"URL normalizada: {normalized_url}")
             url = normalized_url
+        selected_zone = selected_zone_from_url(url)
 
         ua = None
         if headless and use_headless_ua:
@@ -1480,7 +1488,7 @@ def run_scrape(
                 df[col] = pd.to_numeric(df[col].astype(str).str.extract(r"(\d+)")[0], errors="coerce").astype("Int64")
                 df[col] = df[col].astype(object).where(df[col].notna(), "")
 
-        for col in ["Anunciante", "Número", "Local", "Rua", "Preço", "Área", "Link"]:
+        for col in ["Anunciante", "Número", "Local", "Rua", "Preço", "Área", "Link", "Imagem URL"]:
             if col not in df.columns:
                 df[col] = ""
 
@@ -1495,6 +1503,14 @@ def run_scrape(
         cidades: List[str] = []
         for val in ensure_series("Local"):
             b, c = extrai_bairro_e_cidade(val)
+            if selected_zone:
+                b_norm = strip_accents_keep(str(b)).lower()
+                zone_norm = strip_accents_keep(selected_zone).lower()
+                if b:
+                    if zone_norm not in b_norm:
+                        b = f"{b} + {selected_zone}"
+                else:
+                    b = selected_zone
             bairros.append(b)
             cidades.append(c)
 
@@ -1514,6 +1530,7 @@ def run_scrape(
             "Bairro": pd.Series(bairros),
             "Cidade": pd.Series(cidades),
             "UF": pd.Series(ufs),
+            "Imagem": pd.Series([""] * n_rows),
             "Coordenadas": pd.Series([""] * n_rows),
             "Fonte de informação": ensure_series("Anunciante"),
             "Telefone": pd.Series([""] * n_rows),
@@ -1526,6 +1543,7 @@ def run_scrape(
             "Topografia Descrição": pd.Series([""] * n_rows),
             "Área Construída (m²)": pd.Series([""] * n_rows),
             "Valor Oferta (R$)": ensure_series("Preço"),
+            "Imagem URL": ensure_series("Imagem URL"),
             "Link Amostra": ensure_series("Link"),
             "Dormitórios": ensure_series("Quartos"),
             "Suíte": pd.Series([""] * n_rows),

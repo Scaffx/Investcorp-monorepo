@@ -98,13 +98,14 @@ def run_job(job_id: int) -> None:
 
         url = payload.get("url") or ""
         filters = _normalize_filters(payload)
+        use_explicit_url = _has_value(url)
 
         core_keys = ["estado", "cidade", "operacao", "tipo_imovel", "regiao", "bairro", "logradouro"]
         extra_keys = ["quartos", "banheiros", "area_min", "area_max"]
         has_core_filters = any(_has_value(filters.get(k)) for k in core_keys)
         has_any_filters = has_core_filters or any(_has_value(filters.get(k)) for k in extra_keys)
 
-        use_filters = has_core_filters or (not url and has_any_filters)
+        use_filters = (not use_explicit_url) and (has_core_filters or (not url and has_any_filters))
 
         inferred_filters = None
         if use_filters:
@@ -123,7 +124,7 @@ def run_job(job_id: int) -> None:
             )
         elif url:
             inferred_filters = _extract_filters_from_url(url)
-            if inferred_filters:
+            if inferred_filters and not use_explicit_url:
                 try:
                     url = build_url_from_filters(
                         inferred_filters.get("operacao", "venda"),

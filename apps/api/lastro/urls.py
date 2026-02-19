@@ -3,6 +3,7 @@ from . import views
 
 urlpatterns = [
     path("jobs/", views.create_job, name="lastro_create_job"),
+    path("localidades/cidades/", views.cidades_por_uf, name="lastro_cidades_por_uf"),
     path("jobs/latest/", views.job_latest, name="lastro_job_latest"),
     path("jobs/<int:job_id>/", views.job_status, name="lastro_job_status"),
     path("jobs/<int:job_id>/logs/", views.job_logs, name="lastro_job_logs"),

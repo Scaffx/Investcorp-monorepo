@@ -3,17 +3,97 @@ from __future__ import annotations
 import json
 import threading
 import tempfile
+import re
+import unicodedata
 from pathlib import Path
 
 from django.http import JsonResponse, HttpResponseBadRequest, HttpResponse, Http404
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.conf import settings
+import requests
 
 from .models import ScrapeJob, JobLog
 from .result_store import load_preview, load_df
 from .scraper.xlsx_utils import salva_arquivo
 from .tasks import run_job
+
+
+_CITIES_BY_UF_CACHE = None
+
+
+def _load_cities_by_uf_local() -> dict[str, list[str]]:
+    global _CITIES_BY_UF_CACHE
+    if _CITIES_BY_UF_CACHE is not None:
+        return _CITIES_BY_UF_CACHE
+
+    data_path = Path(__file__).resolve().parent / "data" / "cities_by_uf.json"
+    if not data_path.exists():
+        _CITIES_BY_UF_CACHE = {}
+        return _CITIES_BY_UF_CACHE
+
+    try:
+        raw = json.loads(data_path.read_text(encoding="utf-8"))
+    except Exception:
+        _CITIES_BY_UF_CACHE = {}
+        return _CITIES_BY_UF_CACHE
+
+    parsed: dict[str, list[str]] = {}
+    if isinstance(raw, dict):
+        for uf, cities in raw.items():
+            key = str(uf or "").strip().upper()
+            if not key:
+                continue
+            if isinstance(cities, list):
+                parsed[key] = sorted(
+                    {str(city).strip() for city in cities if str(city).strip()},
+                    key=lambda name: name.lower(),
+                )
+    _CITIES_BY_UF_CACHE = parsed
+    return _CITIES_BY_UF_CACHE
+
+
+def _normalize_uf_input(value: str) -> str:
+    raw = str(value or "").strip().upper()
+    if not raw:
+        return ""
+
+    normalized = unicodedata.normalize("NFKD", raw)
+    ascii_only = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    letters = re.sub(r"[^A-Z]", "", ascii_only)
+    by_name = {
+        "ACRE": "AC",
+        "ALAGOAS": "AL",
+        "AMAPA": "AP",
+        "AMAZONAS": "AM",
+        "BAHIA": "BA",
+        "CEARA": "CE",
+        "DISTRITOFEDERAL": "DF",
+        "ESPIRITOSANTO": "ES",
+        "GOIAS": "GO",
+        "MARANHAO": "MA",
+        "MATOGROSSO": "MT",
+        "MATOGROSSODOSUL": "MS",
+        "MINASGERAIS": "MG",
+        "PARA": "PA",
+        "PARAIBA": "PB",
+        "PARANA": "PR",
+        "PERNAMBUCO": "PE",
+        "PIAUI": "PI",
+        "RIODEJANEIRO": "RJ",
+        "RIOGRANDEDONORTE": "RN",
+        "RIOGRANDEDOSUL": "RS",
+        "RONDONIA": "RO",
+        "RORAIMA": "RR",
+        "SANTACATARINA": "SC",
+        "SAOPAULO": "SP",
+        "SERGIPE": "SE",
+        "TOCANTINS": "TO",
+    }
+
+    if len(letters) == 2:
+        return letters
+    return by_name.get(letters, "")
 
 def _json_body(request):
     try:
@@ -160,7 +240,7 @@ def job_export_xlsx(request, job_id: int):
     filename = f"imoveis_job_{job.id}.xlsx"
     with tempfile.TemporaryDirectory() as tmpdir:
         out_path = Path(tmpdir) / filename
-        salva_arquivo(df, out_path, log_cb=None)
+        salva_arquivo(df, out_path, log_cb=None, embutir_imagens=True)
         data = out_path.read_bytes()
 
     response = HttpResponse(
@@ -169,3 +249,38 @@ def job_export_xlsx(request, job_id: int):
     )
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
     return response
+
+
+@require_http_methods(["GET"])
+def cidades_por_uf(request):
+    """
+    Lista cidades para uma UF (ex.: SP -> cidades de Sao Paulo).
+    """
+    uf = _normalize_uf_input(request.GET.get("uf") or "")
+    if not uf or not re.fullmatch(r"[A-Z]{2}", uf):
+        return JsonResponse({"items": []})
+
+    local_map = _load_cities_by_uf_local()
+    local_cities = local_map.get(uf, [])
+    if local_cities:
+        return JsonResponse({"items": [{"value": name, "label": name} for name in local_cities]})
+
+    try:
+        resp = requests.get(
+            f"https://servicodados.ibge.gov.br/api/v1/localidades/estados/{uf}/municipios",
+            timeout=10,
+        )
+        if not resp.ok:
+            return JsonResponse({"items": []})
+        payload = resp.json()
+    except Exception:
+        return JsonResponse({"items": []})
+
+    items = []
+    for city in payload if isinstance(payload, list) else []:
+        name = str(city.get("nome") or "").strip()
+        if name:
+            items.append({"value": name, "label": name})
+
+    items.sort(key=lambda row: row["label"].lower())
+    return JsonResponse({"items": items})
