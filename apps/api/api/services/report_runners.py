@@ -66,6 +66,66 @@ def run_tim(job: JobPaths) -> Path:
     return Path(out_path)
 
 
+# -------------------- CASAS BAHIA --------------------
+def _retarget_casas_bahia(job: JobPaths) -> None:
+    import scripts.casas_bahia_report as casas
+
+    casas.BASE_DIR = job.base
+    casas.REPORT_DIR = job.base
+    casas.MODELOS_DIR = job.modelos
+    casas.REGRAS_DIR = job.regras
+
+    casas.INPUT_FILE = job.modelos / "RelNegociacao.xlsx"
+    casas.RULES_FILE = job.regras / "Casas_Bahia_regras.txt"
+    casas.SPEC_DEFAULT = job.modelos / "CASAS_BAHIA_SPEC.xlsx"
+
+
+def run_casas_bahia(job: JobPaths) -> Path:
+    _retarget_casas_bahia(job)
+    import scripts.casas_bahia_report as casas
+    out_path, _, _ = casas.generate_report()
+    return Path(out_path)
+
+
+# -------------------- DIVERSOS --------------------
+def _retarget_diversos(job: JobPaths) -> None:
+    import scripts.Diversos_RelReneg as diversos
+
+    diversos.REPORT_DIR = str(job.base)
+    diversos.MODELOS_DIR = str(job.modelos)
+    diversos.REGRAS_DIR = str(job.regras)
+
+    diversos.EXCEL_FILENAME = str(job.modelos / "RelNegociacao.xlsx")
+    diversos.REGRAS_FILENAME = str(job.regras / "Diversos_Regras.txt")
+    diversos.MODELO_FILENAME = str(job.modelos / "Report_RelReneg.xlsx")
+
+
+def run_diversos(job: JobPaths) -> Path:
+    _retarget_diversos(job)
+    import scripts.Diversos_RelReneg as diversos
+
+    regras = diversos.carregar_regras_flex(diversos.REGRAS_FILENAME)
+    df = diversos.pd.read_excel(diversos.EXCEL_FILENAME, engine="openpyxl")
+    summary, output_dir = diversos.gerar_reports_com_regras_flex(df, regras)
+
+    if not summary:
+        raise ValueError("Nenhum arquivo foi gerado para Diversos.")
+
+    if len(summary) == 1:
+        return Path(summary[0][2])
+
+    # Caso múltiplos arquivos, empacota tudo em ZIP
+    import zipfile
+
+    zip_path = job.base / "Diversos_reports.zip"
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for _, _, path in summary:
+            p = Path(path)
+            if p.exists():
+                zf.write(p, arcname=p.name)
+    return zip_path
+
+
 # -------------------- CLARO MERGE --------------------
 def _retarget_claro(job: JobPaths) -> None:
     import scripts.claro_merge_report as claro_merge

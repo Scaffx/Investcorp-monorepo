@@ -139,8 +139,14 @@ RELNEG_TO_OUTPUT_LETTER_MAP: dict[str, str] = {
     "CZ": "AS",  # Destino -> AS
 }
 
-# Texto que determina as linhas que NÃO constam no SIIM (buscadas do modelo)
+# Texto que determina linhas que devem ficar somente no modelo (sem preencher pelo SIIM)
 NAO_CONSTA_PATTERN = re.compile(r"na[oã]\s*consta\s*no\s*siim", re.IGNORECASE)
+NAO_PADRAO_PATTERN = re.compile(r"na[oã]\s*esta\s*padr[aã]o", re.IGNORECASE)
+
+# Colunas (letras) do SIIM que representam datas de status.
+STATUS_DATE_LETTERS = [
+    "AX", "AY", "AZ", "BA", "BB", "BC", "BD", "BE", "BF", "BG", "BH",
+]
 
 # ====== Helpers ======
 def normalize_column_key(value: object) -> str:
@@ -389,7 +395,36 @@ def detect_nao_consta_rows(df: pd.DataFrame) -> pd.Series:
     for col in df.columns:
         col_str = df[col].astype(str)
         mask |= col_str.str.contains(NAO_CONSTA_PATTERN)
+        mask |= col_str.str.contains(NAO_PADRAO_PATTERN)
     return mask
+
+
+def to_datetime_series(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return series
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.to_datetime(series, unit="D", origin="1899-12-30", errors="coerce")
+
+    numeric = pd.to_numeric(series, errors="coerce")
+    dt_numeric = pd.to_datetime(numeric, unit="D", origin="1899-12-30", errors="coerce")
+    dt_text = pd.to_datetime(series, errors="coerce", dayfirst=True)
+    return dt_numeric.fillna(dt_text)
+
+
+def compute_latest_status_date(
+    df: pd.DataFrame,
+    letter_map: dict[str, str],
+    letters: list[str],
+) -> pd.Series | None:
+    columns = [letter_map.get(letter) for letter in letters if letter_map.get(letter) in df.columns]
+    if not columns:
+        return None
+
+    dates = [to_datetime_series(df[col]) for col in columns]
+    date_df = pd.concat(dates, axis=1)
+    if date_df.empty:
+        return None
+    return date_df.max(axis=1)
 
 def build_report() -> Path:
     # Saída com base em "ontem" (mesma lógica do seu outro script)
@@ -414,6 +449,7 @@ def build_report() -> Path:
 
     # Regras (ordem base)
     rules = load_order_rules(RULES_FILE)
+    rules_set = set(rules)
     order_map = {value: idx for idx, value in enumerate(rules)}
 
     # Carrega referência (modelo) — aba Renovação
@@ -498,11 +534,12 @@ def build_report() -> Path:
             seen_keys.add(key)
             next_order += 1
 
-    target_keys = set(order_map)
+    # Renovacao deve respeitar SEMPRE o arquivo de regras.
+    target_keys = rules_set
     siim_filtered = siim_df[siim_df["__key_norm"].isin(target_keys)].copy()
     if siim_filtered.empty:
         raise ValueError(
-            "Nenhuma linha do SIIM coincide com as regras e chaves do modelo (CLARO RENOV - Report - Invest.xlsx)."
+            "Nenhuma linha do SIIM coincide com as regras de Renovacao (Claro_Renovacao_regras.txt)."
         )
 
     siim_filtered["__order"] = siim_filtered["__key_norm"].map(order_map)
@@ -523,18 +560,22 @@ def build_report() -> Path:
     siim_series_cache: dict[str, pd.Series] = {}
     siim_part_for_output: pd.DataFrame | None = None
     if not siim_filtered.empty and ref_key_col is not None:
-        # Filtra no SIIM apenas os keys existentes na referência "aguardando"
+        # Renovacao sempre usa as regras. O modelo so influencia os campos quando houver chave em comum.
         ref_keys_set = set(ref_keys_unique)
         if ref_keys_set:
-            siim_part = siim_filtered[siim_filtered["__key_norm"].isin(ref_keys_set)].copy()
-            if siim_part.empty:
+            ref_overlap = ref_keys_set & rules_set
+            if not ref_overlap:
                 print(
-                    "[WARN] As chaves do modelo não foram encontradas no SIIM. Utilizando todas as linhas filtradas pelas regras.",
+                    "[WARN] Nenhuma chave do modelo coincide com as regras de Renovacao. "
+                    "Usando somente as regras.",
                     file=sys.stderr,
                 )
-                siim_part = siim_filtered.copy()
-        else:
-            siim_part = siim_filtered.copy()
+
+        siim_part = siim_filtered.copy()
+        status_date_series = compute_latest_status_date(siim_part, siim_letter_map, STATUS_DATE_LETTERS)
+        use_status_date = (
+            status_date_series is not None and status_date_series.notna().any()
+        )
 
         # Cria dataframe de destino com mesmo número de linhas do SIIM filtrado
         rep_aguardando = pd.DataFrame(index=siim_part.index)
@@ -557,6 +598,8 @@ def build_report() -> Path:
                 file=sys.stderr,
             )
         for dest_col, candidates in SIIM_CONCLUDED_ONLY_MAP.items():
+            if dest_col == "DT. STATUS NEG." and use_status_date:
+                continue
             copy_from_siim(siim_part, rep_aguardando, dest_col, candidates, series_cache=siim_series_cache)
             if dest_col not in rep_aguardando.columns:
                 continue
@@ -564,6 +607,13 @@ def build_report() -> Path:
                 rep_aguardando[dest_col] = rep_aguardando[dest_col].where(concluido_mask, pd.NA)
             else:
                 rep_aguardando[dest_col] = pd.NA
+
+        if use_status_date:
+            rep_aguardando["DT. STATUS NEG."] = status_date_series
+            if concluido_mask is not None:
+                rep_aguardando["DT. STATUS NEG."] = rep_aguardando["DT. STATUS NEG."].where(concluido_mask, pd.NA)
+            else:
+                rep_aguardando["DT. STATUS NEG."] = pd.NA
 
         # Injeta colunas de prioridade vindas da referência (onde existirem na ref)
         if not ref_aguardando.empty:

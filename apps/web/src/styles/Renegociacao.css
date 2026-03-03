@@ -155,6 +155,34 @@
   font: inherit;
 }
 
+.renegociacao-select {
+  color-scheme: light;
+}
+
+.renegociacao-select option,
+.renegociacao-select optgroup {
+  background: #ffffff;
+  color: #0b1e3a;
+}
+
+.renegociacao-file {
+  color-scheme: light;
+}
+
+.renegociacao-file::file-selector-button {
+  border: 1px solid var(--border);
+  background: #f4f7ff;
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 8px;
+  margin-right: 10px;
+  cursor: pointer;
+}
+
+.renegociacao-file::file-selector-button:hover {
+  background: #e9f0ff;
+}
+
 .renegociacao-select:focus,
 .renegociacao-file:focus,
 .renegociacao-input:focus {
@@ -168,6 +196,30 @@
 .invert .renegociacao-input {
   background: rgba(255, 255, 255, 0.04);
   color: #fff;
+}
+
+.invert .renegociacao-select {
+  color-scheme: dark;
+}
+
+.invert .renegociacao-select option,
+.invert .renegociacao-select optgroup {
+  background: #0d2040;
+  color: #eaf1ff;
+}
+
+.invert .renegociacao-file {
+  color-scheme: dark;
+}
+
+.invert .renegociacao-file::file-selector-button {
+  background: #10294f;
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #eaf1ff;
+}
+
+.invert .renegociacao-file::file-selector-button:hover {
+  background: #16345f;
 }
 
 .renegociacao-stack {

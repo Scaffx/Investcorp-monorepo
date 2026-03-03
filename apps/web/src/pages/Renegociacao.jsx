@@ -13,14 +13,11 @@ export const RENEGOCIACAO_SECTIONS = [
 export default function Renegociacao({ permissions, activeKey = "gerar" }) {
   const canEdit = !!permissions?.editar;
   const [reportType, setReportType] = useState("tim");
-  const [rulesetTim, setRulesetTim] = useState("");
-  const [rulesetBradesco, setRulesetBradesco] = useState("");
-  const [rulesetClaroRenov, setRulesetClaroRenov] = useState("");
-  const [rulesetClaroDistr, setRulesetClaroDistr] = useState("");
   const [fileRelneg, setFileRelneg] = useState(null);
   const [fileModeloTim, setFileModeloTim] = useState(null);
   const [fileRefRenov, setFileRefRenov] = useState(null);
   const [fileRefDistr, setFileRefDistr] = useState(null);
+  const [fileRefCasas, setFileRefCasas] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [submitSuccess, setSubmitSuccess] = useState("");
@@ -40,7 +37,9 @@ export default function Renegociacao({ permissions, activeKey = "gerar" }) {
   const rulesetButtons = [
     { key: "bradesco", label: "Regras Bradesco" },
     { key: "casas-bahia", label: "Regras Casas Bahia" },
-    { key: "claro", label: "Regras Claro" },
+    { key: "diversos", label: "Regras Diversos" },
+    { key: "claro-renovacao", label: "Regras Claro Renova\u00e7\u00e3o" },
+    { key: "claro-distrato", label: "Regras Claro Distrato" },
     { key: "tim", label: "Regras Tim" },
   ];
 
@@ -50,7 +49,19 @@ export default function Renegociacao({ permissions, activeKey = "gerar" }) {
       if (stored) {
         const parsed = JSON.parse(stored);
         if (parsed && typeof parsed === "object") {
-          setRuleTexts(parsed);
+          const migrated = { ...parsed };
+          if (
+            parsed.claro &&
+            !parsed["claro-renovacao"] &&
+            !parsed["claro-distrato"]
+          ) {
+            migrated["claro-renovacao"] = parsed.claro;
+            migrated["claro-distrato"] = parsed.claro;
+          }
+          setRuleTexts(migrated);
+          if (migrated !== parsed) {
+            localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(migrated));
+          }
         }
       }
     } catch (err) {
@@ -62,7 +73,8 @@ export default function Renegociacao({ permissions, activeKey = "gerar" }) {
     try {
       const payload = { ...ruleTexts };
       localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(payload));
-      setRuleSaveMessage(`Regras salvas para ${key}.`);
+      const label = rulesetButtons.find((item) => item.key === key)?.label ?? key;
+      setRuleSaveMessage(`Regras salvas para ${label}.`);
     } catch (err) {
       setRuleSaveMessage("Nao foi possivel salvar as regras.");
     }
@@ -70,15 +82,33 @@ export default function Renegociacao({ permissions, activeKey = "gerar" }) {
 
   const isTim = reportType === "tim";
   const isBradesco = reportType === "bradesco";
+  const isCasas = reportType === "casas_bahia";
+  const isDiversos = reportType === "diversos";
   const isClaro = reportType === "claro_merge";
-  const canSubmitTim = rulesetTim && fileRelneg && fileModeloTim;
-  const canSubmitBradesco = rulesetBradesco && fileRelneg;
+  const rulesTim = (ruleTexts.tim || "").trim();
+  const rulesBradesco = (ruleTexts.bradesco || "").trim();
+  const rulesCasas = (ruleTexts["casas-bahia"] || "").trim();
+  const rulesDiversos = (ruleTexts.diversos || "").trim();
+  const rulesClaroRenov = (ruleTexts["claro-renovacao"] || "").trim();
+  const rulesClaroDistr = (ruleTexts["claro-distrato"] || "").trim();
+  const canSubmitTim = rulesTim && fileRelneg && fileModeloTim;
+  const canSubmitBradesco = rulesBradesco && fileRelneg;
+  const canSubmitCasas = rulesCasas && fileRelneg && fileRefCasas;
+  const canSubmitDiversos = rulesDiversos && fileRelneg;
   const canSubmitClaro =
-    rulesetClaroRenov && rulesetClaroDistr && fileRelneg && fileRefRenov && fileRefDistr;
+    rulesClaroRenov && rulesClaroDistr && fileRelneg && fileRefRenov && fileRefDistr;
   const canSubmit =
     canEdit &&
     !isSubmitting &&
-    (isTim ? canSubmitTim : isBradesco ? canSubmitBradesco : canSubmitClaro);
+    (isTim
+      ? canSubmitTim
+      : isBradesco
+      ? canSubmitBradesco
+      : isCasas
+      ? canSubmitCasas
+      : isDiversos
+      ? canSubmitDiversos
+      : canSubmitClaro);
 
   const resetMessages = () => {
     setSubmitError("");
@@ -107,13 +137,18 @@ export default function Renegociacao({ permissions, activeKey = "gerar" }) {
     formData.append("relneg", fileRelneg);
 
     if (isTim) {
-      formData.append("ruleset_id", rulesetTim.trim());
+      formData.append("rules_raw", rulesTim);
       formData.append("modelo_tim", fileModeloTim);
     } else if (isBradesco) {
-      formData.append("ruleset_id", rulesetBradesco.trim());
+      formData.append("rules_raw", rulesBradesco);
+    } else if (isCasas) {
+      formData.append("rules_raw", rulesCasas);
+      formData.append("ref_casas", fileRefCasas);
+    } else if (isDiversos) {
+      formData.append("rules_raw", rulesDiversos);
     } else {
-      formData.append("ruleset_id_renovacao", rulesetClaroRenov.trim());
-      formData.append("ruleset_id_distrato", rulesetClaroDistr.trim());
+      formData.append("rules_raw_renovacao", rulesClaroRenov);
+      formData.append("rules_raw_distrato", rulesClaroDistr);
       formData.append("ref_renov", fileRefRenov);
       formData.append("ref_distr", fileRefDistr);
     }
@@ -132,7 +167,9 @@ export default function Renegociacao({ permissions, activeKey = "gerar" }) {
       }
 
       const blob = await res.blob();
-      const fallbackName = `relatorio-${reportType}.xlsx`;
+      const fallbackName = reportType === "diversos"
+        ? `relatorio-${reportType}.zip`
+        : `relatorio-${reportType}.xlsx`;
       const filename = extractFilename(res.headers.get("content-disposition"), fallbackName);
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
@@ -277,51 +314,66 @@ export default function Renegociacao({ permissions, activeKey = "gerar" }) {
                 >
                   <option value="tim">TIM</option>
                   <option value="bradesco">Bradesco</option>
+                  <option value="casas_bahia">Casas Bahia</option>
+                  <option value="diversos">Diversos</option>
                   <option value="claro_merge">Claro (Merge)</option>
                 </select>
               </div>
 
               <div className="renegociacao-field">
-                <div className="muted">RuleSet ID</div>
+                <div className="muted">Regras usadas</div>
                 {isTim && (
-                  <input
-                    className="renegociacao-input"
-                    type="text"
-                    placeholder="ID do RuleSet TIM"
-                    value={rulesetTim}
-                    onChange={(e) => setRulesetTim(e.target.value)}
-                    disabled={!canEdit || isSubmitting}
-                  />
+                  <>
+                    <div className="muted">
+                      TIM: {rulesTim ? "ok" : "faltando (preencha nas Regras)"}
+                    </div>
+                    <div className="muted renegociacao-hint">
+                      As regras vem do editor acima.
+                    </div>
+                  </>
                 )}
                 {isBradesco && (
-                  <input
-                    className="renegociacao-input"
-                    type="text"
-                    placeholder="ID do RuleSet Bradesco"
-                    value={rulesetBradesco}
-                    onChange={(e) => setRulesetBradesco(e.target.value)}
-                    disabled={!canEdit || isSubmitting}
-                  />
+                  <>
+                    <div className="muted">
+                      Bradesco: {rulesBradesco ? "ok" : "faltando (preencha nas Regras)"}
+                    </div>
+                    <div className="muted renegociacao-hint">
+                      As regras vem do editor acima.
+                    </div>
+                  </>
+                )}
+                {isCasas && (
+                  <>
+                    <div className="muted">
+                      Casas Bahia: {rulesCasas ? "ok" : "faltando (preencha nas Regras)"}
+                    </div>
+                    <div className="muted renegociacao-hint">
+                      As regras vem do editor acima.
+                    </div>
+                  </>
+                )}
+                {isDiversos && (
+                  <>
+                    <div className="muted">
+                      Diversos: {rulesDiversos ? "ok" : "faltando (preencha nas Regras)"}
+                    </div>
+                    <div className="muted renegociacao-hint">
+                      As regras vem do editor acima.
+                    </div>
+                  </>
                 )}
                 {isClaro && (
-                  <div className="renegociacao-stack">
-                    <input
-                      className="renegociacao-input"
-                      type="text"
-                      placeholder="ID RuleSet Renovacao"
-                      value={rulesetClaroRenov}
-                      onChange={(e) => setRulesetClaroRenov(e.target.value)}
-                      disabled={!canEdit || isSubmitting}
-                    />
-                    <input
-                      className="renegociacao-input"
-                      type="text"
-                      placeholder="ID RuleSet Distrato"
-                      value={rulesetClaroDistr}
-                      onChange={(e) => setRulesetClaroDistr(e.target.value)}
-                      disabled={!canEdit || isSubmitting}
-                    />
-                  </div>
+                  <>
+                    <div className="muted">
+                      Renovacao: {rulesClaroRenov ? "ok" : "faltando (preencha nas Regras)"}
+                    </div>
+                    <div className="muted">
+                      Distrato: {rulesClaroDistr ? "ok" : "faltando (preencha nas Regras)"}
+                    </div>
+                    <div className="muted renegociacao-hint">
+                      As regras vem do editor acima.
+                    </div>
+                  </>
                 )}
               </div>
 
@@ -348,6 +400,22 @@ export default function Renegociacao({ permissions, activeKey = "gerar" }) {
                     accept=".xlsx"
                     onChange={(e) => {
                       setFileModeloTim(e.target.files?.[0] || null);
+                      resetMessages();
+                    }}
+                    disabled={!canEdit || isSubmitting}
+                  />
+                </div>
+              )}
+
+              {isCasas && (
+                <div className="renegociacao-field">
+                  <div className="muted">Referencia Casas Bahia (xlsx)</div>
+                  <input
+                    className="renegociacao-file"
+                    type="file"
+                    accept=".xlsx"
+                    onChange={(e) => {
+                      setFileRefCasas(e.target.files?.[0] || null);
                       resetMessages();
                     }}
                     disabled={!canEdit || isSubmitting}

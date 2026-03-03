@@ -1508,7 +1508,7 @@ def run_scrape(
                 zone_norm = strip_accents_keep(selected_zone).lower()
                 if b:
                     if zone_norm not in b_norm:
-                        b = f"{b} + {selected_zone}"
+                        b = f"{b}, {selected_zone}"
                 else:
                     b = selected_zone
             bairros.append(b)

@@ -145,12 +145,15 @@ def run_job(job_id: int) -> None:
             raise ValueError("Informe uma URL ou preencha os filtros de busca.")
 
         filters_source = filters if use_filters else (inferred_filters or {})
+        property_label = filters.get("tipo_imovel", "")
+        if not _has_value(property_label):
+            property_label = (filters_source or {}).get("tipo_imovel", "")
 
         df = run_scrape(
             url,
             headless=bool(payload.get("headless", True)),
             retry_visible=bool(payload.get("retry_visible", True)),
-            property_label=filters_source.get("tipo_imovel", ""),
+            property_label=property_label,
             selected_uf=filters_source.get("estado", ""),
             log_cb=log_cb,
             cancel_cb=cancel_cb,

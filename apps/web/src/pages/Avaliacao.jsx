@@ -195,6 +195,7 @@ export const AVALIACAO_SECTIONS = [
 
 export default function Avaliacao({ permissions, activeKey, onSelect }) {
   const canEdit = !!permissions?.editar;
+  const canSeeLogs = !!permissions?.logs;
   const resolvedKey = AVALIACAO_SECTIONS.some((item) => item.key === activeKey)
     ? activeKey
     : AVALIACAO_SECTIONS[0].key;
@@ -511,7 +512,7 @@ export default function Avaliacao({ permissions, activeKey, onSelect }) {
   }
 
   async function fetchLogs(targetId) {
-    if (!targetId) return;
+    if (!targetId || !canSeeLogs) return;
     setLogsLoading(true);
     setLogsError("");
     try {
@@ -534,6 +535,10 @@ export default function Avaliacao({ permissions, activeKey, onSelect }) {
   useEffect(() => {
     if (!canUseRegiao && regiao) setRegiao("");
   }, [canUseRegiao, regiao]);
+
+  useEffect(() => {
+    if (!canSeeLogs && logsOpen) setLogsOpen(false);
+  }, [canSeeLogs, logsOpen]);
 
   useEffect(() => {
     let canceled = false;
@@ -793,7 +798,11 @@ export default function Avaliacao({ permissions, activeKey, onSelect }) {
                   <span>{jobId ? `Job #${jobId}` : "Sem job ativo"}</span>
                   {jobId ? <span>Itens: {rows.length || "-"}</span> : null}
                 </div>
-                <button type="button" className="avaliacao-btn" onClick={() => setLogsOpen((prev) => !prev)} disabled={!logsJobId}>{logsOpen ? "Ocultar logs" : "Ver logs"}</button>
+                {canSeeLogs ? (
+                  <button type="button" className="avaliacao-btn" onClick={() => setLogsOpen((prev) => !prev)} disabled={!logsJobId}>
+                    {logsOpen ? "Ocultar logs" : "Ver logs"}
+                  </button>
+                ) : null}
               </div>
 
               {error ? (
@@ -859,22 +868,24 @@ export default function Avaliacao({ permissions, activeKey, onSelect }) {
                 </div>
               ) : null}
 
-              <div className={`avaliacao-logs-panel ${logsOpen ? "open" : ""}`}>
-                <div className="avaliacao-logs-head">
-                  <strong>Logs e detalhes</strong>
-                  <button type="button" className="avaliacao-btn" onClick={() => fetchLogs(logsJobId)} disabled={!logsJobId || logsLoading}>{logsLoading ? "Atualizando..." : "Atualizar logs"}</button>
-                </div>
-                {logsOpen ? (
-                  <div className="avaliacao-logs-body">
-                    {logsError ? <div className="avaliacao-inline-error">{logsError}</div> : null}
-                    {logsLoading ? <div className="avaliacao-empty-inline">Carregando logs...</div> : logs.length ? (
-                      <div className="avaliacao-logs-list">
-                        {logs.map((log, idx) => <div key={`${log.created_at || ""}-${idx}`} className="avaliacao-log-item"><span className="avaliacao-log-time">{formatDateTime(log.created_at)}</span><span className="avaliacao-log-text">{log.message}</span></div>)}
-                      </div>
-                    ) : <div className="avaliacao-empty-inline">Nenhum log disponivel.</div>}
+              {canSeeLogs ? (
+                <div className={`avaliacao-logs-panel ${logsOpen ? "open" : ""}`}>
+                  <div className="avaliacao-logs-head">
+                    <strong>Logs e detalhes</strong>
+                    <button type="button" className="avaliacao-btn" onClick={() => fetchLogs(logsJobId)} disabled={!logsJobId || logsLoading}>{logsLoading ? "Atualizando..." : "Atualizar logs"}</button>
                   </div>
-                ) : null}
-              </div>
+                  {logsOpen ? (
+                    <div className="avaliacao-logs-body">
+                      {logsError ? <div className="avaliacao-inline-error">{logsError}</div> : null}
+                      {logsLoading ? <div className="avaliacao-empty-inline">Carregando logs...</div> : logs.length ? (
+                        <div className="avaliacao-logs-list">
+                          {logs.map((log, idx) => <div key={`${log.created_at || ""}-${idx}`} className="avaliacao-log-item"><span className="avaliacao-log-time">{formatDateTime(log.created_at)}</span><span className="avaliacao-log-text">{log.message}</span></div>)}
+                        </div>
+                      ) : <div className="avaliacao-empty-inline">Nenhum log disponivel.</div>}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </section>
           </div>
         </section>

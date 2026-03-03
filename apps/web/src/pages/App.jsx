@@ -6,6 +6,8 @@ import Avaliacao, { AVALIACAO_SECTIONS } from "./Avaliacao";
 import DBICRE from "./DBICRE";
 import Financeiro, { FINANCE_SECTIONS } from "./Financeiro";
 import Prospecao, { PROSPECCAO_SECTIONS } from "./Prospecao";
+import Gestao, { GESTAO_SECTIONS } from "./Gestao";
+import RH, { RH_SECTIONS } from "./RH";
 import "../styles/global.css";
 import {
   AUTH_STORAGE_KEYS,
@@ -130,7 +132,7 @@ function PermissionSwitcher({ role, onRoleChange }) {
   );
 }
 
-function ProfileMenu({ user, roleLabel, onLogout, onOpenSettings }) {
+function ProfileMenu({ user, roleLabel, onLogout, onOpenSettings, onOpenProfile }) {
   const [open, setOpen] = useState(false);
   const menuRef = React.useRef(null);
   const displayName = deriveDisplayName(user);
@@ -167,8 +169,15 @@ function ProfileMenu({ user, roleLabel, onLogout, onOpenSettings }) {
               <div className="profile-role">Acesso: {roleLabel}</div>
             </div>
           </div>
-          <button type="button" className="profile-item" onClick={() => setOpen(false)}>
-            Profile
+          <button
+            type="button"
+            className="profile-item"
+            onClick={() => {
+              setOpen(false);
+              onOpenProfile?.();
+            }}
+          >
+            Perfil
           </button>
           <button
             type="button"
@@ -364,7 +373,7 @@ function MainApp({ role, onRoleChange, user, onLogout, onSaveUser }) {
   const [themeMode, setThemeMode] = useState(() => {
     const stored = localStorage.getItem("theme-mode");
     if (stored === "dark" || stored === "light") return stored;
-    return localStorage.getItem("themeInvert") === "1" ? "dark" : "light";
+    return "dark";
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => localStorage.getItem("sidebar-collapsed") === "1"
@@ -374,6 +383,8 @@ function MainApp({ role, onRoleChange, user, onLogout, onSaveUser }) {
   const location = useLocation();
   const permissions = useMemo(() => getRolePermissions(role), [role]);
   const roleLabel = getRoleLabel(role);
+  const displayName = deriveDisplayName(user);
+  const greetingName = displayName === "Usuario" ? "" : displayName;
   const defaultRoute = useMemo(() => getDefaultRouteForRole(role), [role]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [prospeccaoTab, setProspeccaoTab] = useState(PROSPECCAO_SECTIONS[0]?.key || "cadastrar");
@@ -382,6 +393,8 @@ function MainApp({ role, onRoleChange, user, onLogout, onSaveUser }) {
   );
   const [financeiroTab, setFinanceiroTab] = useState(FINANCE_SECTIONS[0]?.key || "contas");
   const [avaliacaoTab, setAvaliacaoTab] = useState(AVALIACAO_SECTIONS[0]?.key || "buscador");
+  const [gestaoTab, setGestaoTab] = useState(GESTAO_SECTIONS[0]?.key || "perfil");
+  const [rhTab, setRhTab] = useState(RH_SECTIONS[0]?.key || "painel");
 
   useEffect(() => {
     const nextInvert = themeMode === "dark";
@@ -459,8 +472,35 @@ function MainApp({ role, onRoleChange, user, onLogout, onSaveUser }) {
       };
     }
 
+    if (area === "rh") {
+      return {
+        title: getAreaLabel("rh"),
+        items: RH_SECTIONS,
+        activeKey: rhTab,
+        onSelect: setRhTab,
+      };
+    }
+
+    if (area === "gestao") {
+      return {
+        title: getAreaLabel("gestao"),
+        items: GESTAO_SECTIONS,
+        activeKey: gestaoTab,
+        onSelect: setGestaoTab,
+      };
+    }
+
     return null;
-  }, [area, role, prospeccaoTab, renegociacaoTab, financeiroTab, avaliacaoTab]);
+  }, [
+    area,
+    role,
+    prospeccaoTab,
+    renegociacaoTab,
+    financeiroTab,
+    avaliacaoTab,
+    gestaoTab,
+    rhTab,
+  ]);
 
   return (
     <div className="app-shell">
@@ -499,16 +539,46 @@ function MainApp({ role, onRoleChange, user, onLogout, onSaveUser }) {
             onClick={() => navigate("/financeiro")}
             disabled={!permissions.areas?.financeiro}
           />
+          <MenuItem
+            label="RH"
+            active={location.pathname === "/rh"}
+            onClick={() => navigate("/rh")}
+            disabled={!permissions.areas?.rh}
+          />
         </nav>
         </div>
 
         <div className="topbar-right">
-          <div className="pill">{roleLabel}</div>
+          <div className="topbar-greeting">
+            <span>Bem vindo{greetingName ? "," : ""}</span>
+            {greetingName ? <span className="topbar-greeting-name">{greetingName}</span> : null}
+          </div>
+          <button type="button" className="topbar-notification-button" aria-label="Notificacoes">
+            <svg
+              className="topbar-notification-icon"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth="1.5"
+              stroke="currentColor"
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M14.857 17.082a23.848 23.848 0 0 0 5.454-1.31A8.967 8.967 0 0 1 18 9.75V9A6 6 0 0 0 6 9v.75a8.967 8.967 0 0 1-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 0 1-5.714 0m5.714 0a3 3 0 1 1-5.714 0"
+              />
+            </svg>
+            <span className="topbar-notification-badge" aria-hidden="true">
+              <span className="topbar-notification-ping" />
+            </span>
+          </button>
           <ProfileMenu
             user={user}
             roleLabel={roleLabel}
             onLogout={onLogout || handleLogout}
             onOpenSettings={() => setSettingsOpen(true)}
+            onOpenProfile={() => navigate("/perfil")}
           />
         </div>
       </header>
@@ -649,6 +719,47 @@ function MainApp({ role, onRoleChange, user, onLogout, onSaveUser }) {
               )
             }
           />
+          <Route
+            path="/rh"
+            element={
+              permissions.areas?.rh ? (
+                <RH
+                  permissions={getAreaPermissions(role, "rh")}
+                  activeKey={rhTab}
+                  onSelect={setRhTab}
+                  user={user}
+                  role={role}
+                />
+              ) : (
+                <AccessDenied
+                  areaLabel={getAreaLabel("rh")}
+                  roleLabel={roleLabel}
+                  onGoHome={() => navigate(defaultRoute)}
+                />
+              )
+            }
+          />
+          <Route
+            path="/perfil"
+            element={
+              permissions.areas?.gestao ? (
+                <Gestao
+                  permissions={getAreaPermissions(role, "gestao")}
+                  activeKey={gestaoTab}
+                  onSelect={setGestaoTab}
+                  user={user}
+                  role={role}
+                />
+              ) : (
+                <AccessDenied
+                  areaLabel={getAreaLabel("gestao")}
+                  roleLabel={roleLabel}
+                  onGoHome={() => navigate(defaultRoute)}
+                />
+              )
+            }
+          />
+          <Route path="/gestao" element={<Navigate to="/perfil" replace />} />
           <Route path="*" element={<Navigate to={defaultRoute} replace />} />
           </Routes>
         </main>
