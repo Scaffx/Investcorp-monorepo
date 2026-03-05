@@ -11,3 +11,9 @@ selenium==4.40.0
 sqlparse==0.5.5
 tzdata==2025.3
 webdriver-manager==4.0.2
+gunicorn
+whitenoise
+dj-database-url
+psycopg[binary]
+django-cors-headers
+python-dotenv
