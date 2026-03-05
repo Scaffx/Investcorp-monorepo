@@ -1,48 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 from pathlib import Path
 from datetime import datetime, timedelta
 import sys
 import re
 import unicodedata
 import pandas as pd
-
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
-try:
-    from .utils import show_generation_popup
-except ImportError:
-    current_dir = Path(__file__).resolve().parent
-    if str(current_dir) not in sys.path:
-        sys.path.append(str(current_dir))
-    from utils import show_generation_popup  # type: ignore[import-not-found]
+# ====== CONFIGURAÇÕES DE CAMINHOS PARA SERVIDOR ======
+BASE_DIR = Path(__file__).resolve().parent.parent
+REPORT_DIR = BASE_DIR / "reports_gerados"
+MODELOS_DIR = BASE_DIR / "modelos"
 
-# ====== CONFIG ======
-DESKTOP = Path.home() / "Desktop"
-BASE_DIR = DESKTOP / "Report"
-MODELOS_DIR = BASE_DIR / "Modelos"
-INPUT_FILE = MODELOS_DIR / "RelNegociacao.xlsx"  # Export do SIIM (RelNegociacao)
-REGRAS_DIR = BASE_DIR / "REGRAS"
-RULES_FILE = REGRAS_DIR / "Claro_Renovacao_regras.txt"  # Lista de NSEQ/contratos na ordem desejada (1 por linha ou separados por ; , espaço)
-
-REFERENCE_FILE = MODELOS_DIR / "CLARO_RENOV-Report-Invest.xlsx"
 REFERENCE_SHEET_NAME = "CLARO - RENOVAÇÃO 2024"
-# Caso o cabeçalho real comece na terceira linha da planilha de referência (como alguns modelos), ajuste aqui:
 REFERENCE_HEADER_ROW = 3  # 0 = primeira linha é o header
 SHEET_NAME = "Claro - Renovação"
+
 # ====================
+HEADERS_RENOVACAO: list[str] = []
 
-# Cabeçalho final do report (ORDEM FINAL).
-# Se você quiser fixar uma ordem final específica, declare aqui. Caso deixe vazio,
-# o script usará todas as colunas presentes na referência (mantendo a ordem da referência).
-HEADERS_RENOVACAO: list[str] = [
-    # Ex.: "EMPRESA_COD","EMPRESA_NOME","ORDEM_SAP", ...
-]
-
-# Colunas que serão preenchidas a partir do SIIM (RelNegociacao) para os itens "constam no SIIM".
-# Mapeie: coluna_destino -> [candidatos_no_SIIM]
 SIIM_COLUMN_MAP: dict[str, list[str]] = {
     "ORDEM_SAP": ["CONTRATO", "ORDEM SAP", "ORDEM_SAP"],
     "DATA_INICIO": ["INICIO CONTRATO", "DATA INICIO", "DATA_INICIO"],
@@ -69,7 +49,6 @@ SIIM_COLUMN_MAP: dict[str, list[str]] = {
     "EMPRESA_NOME": ["EMPRESA","EMPRESA NOME"],
 }
 
-# Colunas do SIIM que só devem ser preenchidas quando a Situação estiver concluída.
 SIIM_CONCLUDED_ONLY_MAP: dict[str, list[str]] = {
     "DT. STATUS NEG.": ["DATA HISTORICO", "DT STATUS NEG", "DT. STATUS NEG."],
     "INÍCIO DO NOVO ALUGUEL": ["INICIO DO NOVO ALUGUEL", "INÍCIO DO NOVO ALUGUEL"],
@@ -84,69 +63,29 @@ SIIM_CONCLUDED_ONLY_MAP: dict[str, list[str]] = {
     "ANO ALTERAÇÃO ÍNDICE": ["ANO ALTERACAO INDICE", "ANO ALTERAÇÃO ÍNDICE"],
 }
 
-# Colunas da referência que têm prioridade sobre o SIIM quando ambas existirem
 REFERENCE_PRIORITY_COLUMNS: list[str] = [
-    "EMPRESA_COD",
-    "EMPRESA_NOME",
-    "LOCAL_NEGOCIO",
-    "CENTRO_DE_CUSTO",
-    "ID_GSM",
-    "CLASSIFICACAO_GNI",
-    "TP_CONTRATO",
-    "TPC",
-    "TIPO_DE_INFRA",
-    "RENOVACAO_AUTOMATICA",
-    "PERIODO",
-    "ATIVO?",
-    "NEGOCIADOR",
-    "EMPRESA NEGOCIADORA",
-    "CARTEIRA",
-    "DT. ENVIO FORNECEDOR",
-    "MÉDIA ARCGIS",
-    "CONDIÇÃO CONTRATUAL",
-    "ICG S/N",
-    "MÊS ICG BASE LINE",
-    "MÊS ICG FORECAST",
-    "MEDIA ARCGIS 5K",
-    "PROVISAO S/N",
-    "VALOR PROVISIONADO MAIO_22",
-    "AÇÃO JUDICIAL/TIPO",
-    "CRITICIDADE SMART",
-    "CONTRATO RE",
-    "REGIONAL",
-    "ENDERECO",
-    "BAIRRO",
-    "CIDADE",
-    "CEP_COMPLEMENTAR",
-    "ESTADO",
-    "CONTATO",
-    "E-MAIL",
-    "AREA_LOCADA",
-    "CPF",
-    "CNPJ",
-    "STATUS",
+    "EMPRESA_COD", "EMPRESA_NOME", "LOCAL_NEGOCIO", "CENTRO_DE_CUSTO", "ID_GSM",
+    "CLASSIFICACAO_GNI", "TP_CONTRATO", "TPC", "TIPO_DE_INFRA", "RENOVACAO_AUTOMATICA",
+    "PERIODO", "ATIVO?", "NEGOCIADOR", "EMPRESA NEGOCIADORA", "CARTEIRA",
+    "DT. ENVIO FORNECEDOR", "MÉDIA ARCGIS", "CONDIÇÃO CONTRATUAL", "ICG S/N",
+    "MÊS ICG BASE LINE", "MÊS ICG FORECAST", "MEDIA ARCGIS 5K", "PROVISAO S/N",
+    "VALOR PROVISIONADO MAIO_22", "AÇÃO JUDICIAL/TIPO", "CRITICIDADE SMART",
+    "CONTRATO RE", "REGIONAL", "ENDERECO", "BAIRRO", "CIDADE", "CEP_COMPLEMENTAR",
+    "ESTADO", "CONTATO", "E-MAIL", "AREA_LOCADA", "CPF", "CNPJ", "STATUS",
 ]
 
-# Ajustes do layout final
 DROP_COLUMNS_BY_LETTER: tuple[str, ...] = ("BH", "BI")
 STATUS_REFERENCE_LETTER = "AH"
 COMBINE_COLUMN_LETTER = "AI"
 COMBINE_SEPARATOR = " / "
 RELNEG_TO_OUTPUT_LETTER_MAP: dict[str, str] = {
-    "CW": "AO",  # % -> AO
-    "CV": "AN",  # Novo valor aluguel -> AN
-    "CX": "AR",  # Periodo renovação -> AR
-    "CZ": "AS",  # Destino -> AS
+    "CW": "AO",
+    "CV": "AN",
+    "CX": "AR",
+    "CZ": "AS",
 }
 
-# Texto que determina linhas que devem ficar somente no modelo (sem preencher pelo SIIM)
 NAO_CONSTA_PATTERN = re.compile(r"na[oã]\s*consta\s*no\s*siim", re.IGNORECASE)
-NAO_PADRAO_PATTERN = re.compile(r"na[oã]\s*esta\s*padr[aã]o", re.IGNORECASE)
-
-# Colunas (letras) do SIIM que representam datas de status.
-STATUS_DATE_LETTERS = [
-    "AX", "AY", "AZ", "BA", "BB", "BC", "BD", "BE", "BF", "BG", "BH",
-]
 
 # ====== Helpers ======
 def normalize_column_key(value: object) -> str:
@@ -166,7 +105,6 @@ def find_column(df: pd.DataFrame, name: str) -> str | None:
     return None
 
 def normalize_key_token(value: object) -> str:
-    """Normaliza chaves como NSEQ/Contrato para comparação e ordenação."""
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return ""
     if isinstance(value, float) and value.is_integer():
@@ -200,7 +138,6 @@ def series_is_empty(series: pd.Series) -> pd.Series:
         mask |= series.astype(str).str.strip() == ""
     return mask
 
-
 def to_numeric_series(series: pd.Series | None) -> pd.Series | None:
     if series is None:
         return None
@@ -215,9 +152,8 @@ def to_numeric_series(series: pd.Series | None) -> pd.Series | None:
         return pd.to_numeric(cleaned, errors="coerce")
     return pd.to_numeric(series, errors="coerce")
 
-
 def excel_index_to_letter(index: int) -> str:
-    if index <= 0:
+    if index &lt;= 0:
         raise ValueError("Excel column index must be positive.")
     letters = ""
     while index:
@@ -225,22 +161,8 @@ def excel_index_to_letter(index: int) -> str:
         letters = chr(65 + remainder) + letters
     return letters
 
-
-def excel_letter_to_index(letter: str) -> int:
-    cleaned = letter.strip().upper()
-    if not cleaned:
-        raise ValueError("Excel column letter cannot be empty.")
-    index = 0
-    for ch in cleaned:
-        if not ("A" <= ch <= "Z"):
-            raise ValueError(f"Invalid Excel column letter: {letter}")
-        index = index * 26 + (ord(ch) - 64)
-    return index
-
-
 def build_letter_column_map(columns: list[str]) -> dict[str, str]:
     return {excel_index_to_letter(idx): name for idx, name in enumerate(columns, start=1)}
-
 
 def clean_display_text(value: object) -> str:
     if value is None or pd.isna(value):
@@ -250,7 +172,6 @@ def clean_display_text(value: object) -> str:
     if not text or lower in {"nan", "<na>"}:
         return ""
     return text
-
 
 def combine_series_with_separator(
     primary_series: pd.Series,
@@ -267,39 +188,6 @@ def combine_series_with_separator(
         parts = [part for part in (primary, secondary) if part]
         combined.append(separator.join(parts))
     return pd.Series(combined, index=primary_series.index)
-
-def load_order_rules(path: Path) -> list[str]:
-    """Carrega a lista de NSEQ/contratos na ordem desejada (permite números separados por ; , ou espaço)."""
-    if not path.exists():
-        raise FileNotFoundError(f"Arquivo de regras não encontrado: {path}")
-    ordered: list[str] = []
-    seen: set[str] = set()
-    line_index = 0
-    with path.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = re.split(r"[;,\s]+", line)
-            tokens: list[str] = []
-            for part in parts:
-                norm = normalize_key_token(part)
-                if not norm or not norm.isdigit():
-                    continue
-                tokens.append(norm)
-            if not tokens:
-                continue
-            line_index += 1
-            if len(tokens) > 1 and tokens[0] == str(line_index):
-                tokens = tokens[1:]
-            for norm in tokens:
-                if norm in seen:
-                    continue
-                ordered.append(norm)
-                seen.add(norm)
-    if not ordered:
-        raise ValueError(f"Nenhum identificador válido encontrado no arquivo de regras: {path}")
-    return ordered
 
 def copy_from_siim(
     source_df: pd.DataFrame,
@@ -329,15 +217,13 @@ def apply_excel_formatting(path: Path, sheet_name: str) -> None:
         wb.save(path)
         return
     ws = wb[sheet_name]
-    if ws.max_row < 1 or ws.max_column < 1:
+    if ws.max_row &lt; 1 or ws.max_column &lt; 1:
         wb.save(path)
         return
-
-    # Estilo
+    
     ws.freeze_panes = "D2"
     ws.auto_filter.ref = ws.dimensions
     ws.row_dimensions[1].height = 26
-
     header_font = Font(color="FFFFFF", bold=True)
     red_fill = PatternFill(fill_type="solid", fgColor="FF033E")
     navy_fill = PatternFill(fill_type="solid", fgColor="00008B")
@@ -346,8 +232,7 @@ def apply_excel_formatting(path: Path, sheet_name: str) -> None:
 
     for cell in ws[1]:
         col_idx = cell.column
-        # Exemplo de cores por faixa de colunas — ajuste se quiser diferenciar grupos
-        if 30 <= col_idx <= 36:
+        if 30 &lt;= col_idx &lt;= 36:
             cell.fill = navy_fill
         else:
             cell.fill = red_fill
@@ -361,7 +246,6 @@ def apply_excel_formatting(path: Path, sheet_name: str) -> None:
             if cell.alignment is None or cell.alignment.horizontal is None:
                 cell.alignment = Alignment(horizontal="left", vertical="top")
 
-    # Larguras aproximadas
     sample_rows = min(ws.max_row, 200)
     for col_idx in range(1, ws.max_column + 1):
         max_length = 0
@@ -375,19 +259,17 @@ def apply_excel_formatting(path: Path, sheet_name: str) -> None:
                     max_length = len(part)
         width = min(max(max_length + 2, 12), 60)
         ws.column_dimensions[get_column_letter(col_idx)].width = width
-
     wb.save(path)
 
-# ====== Núcleo ======
-def read_siim_df(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        raise FileNotFoundError(f"Arquivo de entrada (SIIM) não encontrado: {path}")
-    if path.suffix.lower() in (".xlsx", ".xls"):
-        return pd.read_excel(path)
-    # tenta CSV (; depois ,)
-    df = pd.read_csv(path, sep=";", encoding="utf-8", engine="python")
+def read_siim_df(path: Path | str) -> pd.DataFrame:
+    path_obj = Path(path)
+    if not path_obj.exists():
+        raise FileNotFoundError(f"Arquivo de entrada (SIIM) não encontrado: {path_obj}")
+    if path_obj.suffix.lower() in (".xlsx", ".xls"):
+        return pd.read_excel(path_obj)
+    df = pd.read_csv(path_obj, sep=";", encoding="utf-8", engine="python")
     if df.shape[1] == 1:
-        df = pd.read_csv(path, sep=",", encoding="utf-8", engine="python")
+        df = pd.read_csv(path_obj, sep=",", encoding="utf-8", engine="python")
     return df
 
 def detect_nao_consta_rows(df: pd.DataFrame) -> pd.Series:
@@ -395,88 +277,93 @@ def detect_nao_consta_rows(df: pd.DataFrame) -> pd.Series:
     for col in df.columns:
         col_str = df[col].astype(str)
         mask |= col_str.str.contains(NAO_CONSTA_PATTERN)
-        mask |= col_str.str.contains(NAO_PADRAO_PATTERN)
     return mask
 
+# ====== NÚCLEO ADAPTADO PARA API ======
+def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path: str | Path | None = None) -> Path:
+    """
+    Função principal adaptada para receber dados da API.
+    O modelo é opcional. Se não for fornecido, cria um DataFrame vazio como base.
+    """
+    if not nseq_list:
+        raise ValueError("Nenhum NSEQ fornecido para processamento.")
 
-def to_datetime_series(series: pd.Series) -> pd.Series:
-    if pd.api.types.is_datetime64_any_dtype(series):
-        return series
-    if pd.api.types.is_numeric_dtype(series):
-        return pd.to_datetime(series, unit="D", origin="1899-12-30", errors="coerce")
-
-    numeric = pd.to_numeric(series, errors="coerce")
-    dt_numeric = pd.to_datetime(numeric, unit="D", origin="1899-12-30", errors="coerce")
-    dt_text = pd.to_datetime(series, errors="coerce", dayfirst=True)
-    return dt_numeric.fillna(dt_text)
-
-
-def compute_latest_status_date(
-    df: pd.DataFrame,
-    letter_map: dict[str, str],
-    letters: list[str],
-) -> pd.Series | None:
-    columns = [letter_map.get(letter) for letter in letters if letter_map.get(letter) in df.columns]
-    if not columns:
-        return None
-
-    dates = [to_datetime_series(df[col]) for col in columns]
-    date_df = pd.concat(dates, axis=1)
-    if date_df.empty:
-        return None
-    return date_df.max(axis=1)
-
-def build_report() -> Path:
-    # Saída com base em "ontem" (mesma lógica do seu outro script)
-    yesterday = datetime.now() - timedelta(days=1)
-    folder_token = yesterday.strftime("%d-%m-%Y")
-    filename_token = yesterday.strftime("%d%m%Y")
-    out_dir = BASE_DIR / folder_token
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"CLARO_RENOVACAO_{filename_token}.xlsx"
-
-    # Carrega SIIM
-    siim_df = read_siim_df(INPUT_FILE)
-    siim_df.columns = [str(c).strip() for c in siim_df.columns]
-    siim_letter_map = build_letter_column_map(list(siim_df.columns))
-
-    # Normaliza chave (NSEQ preferencial, senão CONTRATO)
-    key_col = find_column(siim_df, "NSEQ") or find_column(siim_df, "CONTRATO")
-    if not key_col:
-        raise KeyError("Não encontrei coluna 'NSEQ' nem 'CONTRATO' no arquivo do SIIM (RelNegociacao).")
-    siim_df["__key_norm"] = siim_df[key_col].map(normalize_key_token)
-    siim_df["__key_display"] = siim_df[key_col].map(format_key_display)
-
-    # Regras (ordem base)
-    rules = load_order_rules(RULES_FILE)
+    # Limpa e normaliza os NSEQs recebidos
+    rules = [normalize_key_token(n) for n in nseq_list if normalize_key_token(n)]
     rules_set = set(rules)
     order_map = {value: idx for idx, value in enumerate(rules)}
 
-    # Carrega referência (modelo) — aba Renovação
-    if not REFERENCE_FILE.exists():
-        raise FileNotFoundError(f"Arquivo de referência não encontrado: {REFERENCE_FILE}")
-    reference_df = pd.read_excel(
-        REFERENCE_FILE,
-        sheet_name=REFERENCE_SHEET_NAME,
-        header=REFERENCE_HEADER_ROW,
-    )
-    reference_df.columns = [str(c).strip() for c in reference_df.columns]
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    agora = datetime.now()
+    out_path = REPORT_DIR / f"CLARO_RENOVACAO_{agora.strftime('%d%m%Y_%H%M%S')}.xlsx"
+
+    # Carrega SIIM do arquivo enviado pelo frontend
+    siim_df = read_siim_df(negociacao_file_path)
+    siim_df.columns = [str(c).strip() for c in siim_df.columns]
+    siim_letter_map = build_letter_column_map(list(siim_df.columns))
+
+    key_col = find_column(siim_df, "NSEQ") or find_column(siim_df, "CONTRATO")
+    if not key_col:
+        raise KeyError("Não encontrei coluna 'NSEQ' nem 'CONTRATO' no arquivo do SIIM (RelNegociacao).")
+
+    siim_df["__key_norm"] = siim_df[key_col].map(normalize_key_token)
+    siim_df["__key_display"] = siim_df[key_col].map(format_key_display)
+
+    # 
+    # LÓGICA DO MODELO OPCIONAL
+    # 
+    reference_df = pd.DataFrame() # Começa vazio
+    
+    if modelo_file_path and Path(modelo_file_path).exists():
+        reference_file = Path(modelo_file_path)
+        try:
+            reference_df = pd.read_excel(
+                reference_file,
+                sheet_name=REFERENCE_SHEET_NAME,
+                header=REFERENCE_HEADER_ROW,
+            )
+            reference_df.columns = [str(c).strip() for c in reference_df.columns]
+        except Exception as e:
+            print(f"[WARN] Erro ao ler modelo fornecido: {e}. Prosseguindo sem modelo.")
+            reference_df = pd.DataFrame()
+    else:
+        # Tenta achar o fixo no servidor, se não achar, segue sem modelo
+        reference_file = MODELOS_DIR / "CLARO_RENOV-Report-Invest.xlsx"
+        if reference_file.exists():
+            try:
+                reference_df = pd.read_excel(
+                    reference_file,
+                    sheet_name=REFERENCE_SHEET_NAME,
+                    header=REFERENCE_HEADER_ROW,
+                )
+                reference_df.columns = [str(c).strip() for c in reference_df.columns]
+            except Exception:
+                pass
+
+    # Se não conseguimos carregar nenhum modelo, criamos um DataFrame vazio com as colunas prioritárias
+    if reference_df.empty:
+        reference_df = pd.DataFrame(columns=REFERENCE_PRIORITY_COLUMNS + ["NSEQ - Siim"])
+    # 
+
     reference_columns = list(reference_df.columns)
     reference_letter_map = build_letter_column_map(reference_columns)
+
     combine_column_name = reference_letter_map.get(COMBINE_COLUMN_LETTER)
     status_reference_column_name = reference_letter_map.get(STATUS_REFERENCE_LETTER)
+
     drop_column_names: list[str] = []
     for letter in DROP_COLUMNS_BY_LETTER:
         column_name = reference_letter_map.get(letter)
         if column_name:
             drop_column_names.append(column_name)
+
     relneg_letter_mappings: list[tuple[str, str]] = []
     for relneg_letter, output_letter in RELNEG_TO_OUTPUT_LETTER_MAP.items():
         source_column = siim_letter_map.get(relneg_letter.upper())
         destination_column = reference_letter_map.get(output_letter.upper())
         if source_column and destination_column:
             relneg_letter_mappings.append((source_column, destination_column))
-    column_am = reference_letter_map.get("AM")
+
     column_am = reference_letter_map.get("AM")
     column_an = reference_letter_map.get("AN")
     column_ap = reference_letter_map.get("AP")
@@ -486,24 +373,21 @@ def build_report() -> Path:
     column_av = reference_letter_map.get("AV")
     column_aw = reference_letter_map.get("AW")
 
-    # Identifica linhas "não consta no siim" na referência
     mask_nao_consta = detect_nao_consta_rows(reference_df)
-    ref_nao_consta = reference_df[mask_nao_consta].copy()     # vem do modelo
-    ref_aguardando = reference_df[~mask_nao_consta].copy()    # deve vir do SIIM
+    ref_nao_consta = reference_df[mask_nao_consta].copy()
+    ref_aguardando = reference_df[~mask_nao_consta].copy()
 
-    # Chave também na referência (usa NSEQ - Siim, ou NSEQ, ou CONTRATO) para linkar com SIIM
     ref_key_col = (
         find_column(ref_aguardando, "NSEQ - Siim")
         or find_column(ref_aguardando, "NSEQ")
         or find_column(ref_aguardando, "CONTRATO")
         or find_column(ref_aguardando, "ORDEM_SAP")
     )
+
     ref_keys_series = pd.Series(dtype="object", index=ref_aguardando.index)
     ref_keys_unique: list[str] = []
-    if ref_key_col is None:
-        # Se não houver chave, ainda assim produziremos relatório: "não consta" + "aguardando" sem merge de SIIM
-        print("[WARN] Não encontrei uma coluna de chave (ex.: 'NSEQ - Siim'/'NSEQ'/'CONTRATO') na referência para fazer merge com o SIIM.", file=sys.stderr)
-    else:
+
+    if ref_key_col is not None:
         ref_keys_series = ref_aguardando[ref_key_col].map(normalize_key_token).fillna("")
         seen_ref_keys: set[str] = set()
         for key in ref_keys_series:
@@ -513,19 +397,15 @@ def build_report() -> Path:
             ref_keys_unique.append(key)
 
     status_reference_map: pd.Series | None = None
-    if (
-        status_reference_column_name
-        and status_reference_column_name in ref_aguardando.columns
-        and not ref_aguardando.empty
-    ):
+    if status_reference_column_name and status_reference_column_name in ref_aguardando.columns and not ref_aguardando.empty:
         ref_status = ref_aguardando[[status_reference_column_name]].copy()
         ref_status["__key_norm"] = ref_keys_series.reindex(ref_status.index).fillna("")
         ref_status = ref_status[ref_status["__key_norm"].astype(bool)]
         if not ref_status.empty:
             status_reference_map = ref_status.set_index("__key_norm")[status_reference_column_name]
+
     status_reference_lookup = status_reference_map.to_dict() if status_reference_map is not None else None
 
-    # Ajusta ordem com base nas chaves da referência
     next_order = len(order_map)
     seen_keys = set(order_map)
     for key in ref_keys_unique:
@@ -534,72 +414,37 @@ def build_report() -> Path:
             seen_keys.add(key)
             next_order += 1
 
-    # Renovacao deve respeitar SEMPRE o arquivo de regras.
     target_keys = rules_set
     siim_filtered = siim_df[siim_df["__key_norm"].isin(target_keys)].copy()
+
     if siim_filtered.empty:
-        raise ValueError(
-            "Nenhuma linha do SIIM coincide com as regras de Renovacao (Claro_Renovacao_regras.txt)."
-        )
+        raise ValueError("Nenhuma linha do SIIM coincide com os NSEQs informados.")
 
     siim_filtered["__order"] = siim_filtered["__key_norm"].map(order_map)
     siim_filtered = siim_filtered.sort_values("__order").reset_index(drop=True)
 
-    if ref_keys_unique:
-        available_keys = set(siim_filtered["__key_norm"])
-        missing_keys = [key for key in ref_keys_unique if key not in available_keys]
-        if missing_keys:
-            print(
-                f"[WARN] NSEQ do modelo sem correspondência no SIIM: {', '.join(missing_keys)}",
-                file=sys.stderr,
-            )
-
-    # Monta base de saída para "aguardando": começa vazia e preenche com SIIM
     rep_aguardando = pd.DataFrame()
     rep_aguardando_keys: pd.Series | None = None
     siim_series_cache: dict[str, pd.Series] = {}
     siim_part_for_output: pd.DataFrame | None = None
-    if not siim_filtered.empty and ref_key_col is not None:
-        # Renovacao sempre usa as regras. O modelo so influencia os campos quando houver chave em comum.
-        ref_keys_set = set(ref_keys_unique)
-        if ref_keys_set:
-            ref_overlap = ref_keys_set & rules_set
-            if not ref_overlap:
-                print(
-                    "[WARN] Nenhuma chave do modelo coincide com as regras de Renovacao. "
-                    "Usando somente as regras.",
-                    file=sys.stderr,
-                )
 
+    if not siim_filtered.empty:
         siim_part = siim_filtered.copy()
-        status_date_series = compute_latest_status_date(siim_part, siim_letter_map, STATUS_DATE_LETTERS)
-        use_status_date = (
-            status_date_series is not None and status_date_series.notna().any()
-        )
-
-        # Cria dataframe de destino com mesmo número de linhas do SIIM filtrado
         rep_aguardando = pd.DataFrame(index=siim_part.index)
         siim_part_for_output = siim_part
         rep_aguardando_keys = siim_part["__key_norm"].copy()
 
-        # Copia colunas do SIIM conforme mapeamento
         for dest_col, candidates in SIIM_COLUMN_MAP.items():
             copy_from_siim(siim_part, rep_aguardando, dest_col, candidates, series_cache=siim_series_cache)
 
-        # Copia colunas condicionais (apenas para situações concluídas)
         situacao_col = find_column(siim_part, "SITUACAO") or find_column(siim_part, "STATUS")
         concluido_mask: pd.Series | None = None
+
         if situacao_col is not None:
             situacao_series = siim_part[situacao_col].map(normalize_text_value)
             concluido_mask = situacao_series.str.contains("concluid", na=False)
-        else:
-            print(
-                "[WARN] Não encontrei coluna 'Situação' no SIIM. As colunas condicionais não serão filtradas.",
-                file=sys.stderr,
-            )
+
         for dest_col, candidates in SIIM_CONCLUDED_ONLY_MAP.items():
-            if dest_col == "DT. STATUS NEG." and use_status_date:
-                continue
             copy_from_siim(siim_part, rep_aguardando, dest_col, candidates, series_cache=siim_series_cache)
             if dest_col not in rep_aguardando.columns:
                 continue
@@ -608,25 +453,14 @@ def build_report() -> Path:
             else:
                 rep_aguardando[dest_col] = pd.NA
 
-        if use_status_date:
-            rep_aguardando["DT. STATUS NEG."] = status_date_series
-            if concluido_mask is not None:
-                rep_aguardando["DT. STATUS NEG."] = rep_aguardando["DT. STATUS NEG."].where(concluido_mask, pd.NA)
-            else:
-                rep_aguardando["DT. STATUS NEG."] = pd.NA
-
-        # Injeta colunas de prioridade vindas da referência (onde existirem na ref)
         if not ref_aguardando.empty:
-            # Mapeia <- chave para busca
             ref_aug = ref_aguardando.copy()
             ref_aug["__key_norm"] = ref_keys_series.reindex(ref_aug.index).fillna("")
 
-            # Para cada coluna da referência que também está no destino e é prioritária, usamos a referência quando não-vazia
             for col in ref_aug.columns:
                 if col == "__key_norm":
                     continue
                 if col not in rep_aguardando.columns:
-                    # se a coluna fizer parte do layout final, vamos adicionando também
                     rep_aguardando[col] = pd.NA
 
             for col in REFERENCE_PRIORITY_COLUMNS:
@@ -634,7 +468,7 @@ def build_report() -> Path:
                     continue
                 series_map = ref_aug.set_index("__key_norm")[col]
                 mapped = siim_part["__key_norm"].map(series_map)
-                # Preenche se valor vindo da ref não é vazio
+
                 if col not in rep_aguardando.columns:
                     rep_aguardando[col] = mapped
                 else:
@@ -642,22 +476,17 @@ def build_report() -> Path:
                     mapped = mapped.where(~series_is_empty(mapped), pd.NA).astype("object")
                     rep_aguardando[col] = mapped.combine_first(base)
 
-        # Opcional: traz também a coluna "NSEQ - Siim" para conferência, se existir no SIIM original
         rep_aguardando["NSEQ - Siim"] = siim_part["__key_display"]
 
         for source_column, destination_column in relneg_letter_mappings:
             if source_column in siim_part.columns:
                 rep_aguardando[destination_column] = siim_part[source_column].reindex(rep_aguardando.index)
 
-    # Linhas "não consta" são levadas do modelo como estão
     rep_nao_consta = ref_nao_consta.copy()
 
-    # Consolida
-    # Define ordem de colunas
     if HEADERS_RENOVACAO:
         final_cols = HEADERS_RENOVACAO[:]
     else:
-        # Usa as colunas da referência como layout base + o que tiver a mais do SIIM
         ref_cols = list(reference_df.columns)
         siim_extra = [c for c in rep_aguardando.columns if c not in ref_cols]
         final_cols = ref_cols + siim_extra
@@ -669,8 +498,6 @@ def build_report() -> Path:
         if not rep_aguardando.empty:
             rep_aguardando = rep_aguardando.drop(columns=columns_to_remove, errors='ignore')
 
-
-    # Garante todas as colunas
     def ensure_columns(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
         for c in cols:
             if c not in df.columns:
@@ -711,20 +538,12 @@ def build_report() -> Path:
             if bw_series is not None
             else None
         )
-        if (
-            column_am
-            and column_am in rep_aguardando.columns
-            and aluguel_series is not None
-        ):
+
+        if column_am and column_am in rep_aguardando.columns and aluguel_series is not None:
             mask = aluguel_series.notna()
             rep_aguardando.loc[mask, column_am] = aluguel_series[mask]
 
-        if (
-            column_an
-            and column_an in rep_aguardando.columns
-            and aluguel_series is not None
-            and cv_series is not None
-        ):
+        if column_an and column_an in rep_aguardando.columns and aluguel_series is not None and cv_series is not None:
             novo_valor_series = aluguel_series - cv_series
             mask = novo_valor_series.notna()
             rep_aguardando.loc[mask, column_an] = novo_valor_series[mask]
@@ -743,12 +562,8 @@ def build_report() -> Path:
                 next_day = t_series + pd.to_timedelta(1, unit="D")
                 mask = next_day.notna()
                 rep_aguardando.loc[mask, column_at] = next_day[mask]
-        if (
-            column_at
-            and column_at in rep_aguardando.columns
-            and bw_mask is not None
-            and ee_series is not None
-        ):
+
+        if column_at and column_at in rep_aguardando.columns and bw_mask is not None and ee_series is not None:
             override_values = ee_series.reindex(index)
             mask = bw_mask.reindex(index, fill_value=False) & override_values.notna()
             rep_aguardando.loc[mask, column_at] = override_values[mask]
@@ -757,13 +572,11 @@ def build_report() -> Path:
             cm_series = reindexed_siim_series("CM")
             month_series = datetime_series_from_letter("CX")
             year_series = datetime_series_from_letter("V")
-            if (
-                cm_series is not None
-                and month_series is not None
-                and year_series is not None
-            ):
+
+            if cm_series is not None and month_series is not None and year_series is not None:
                 cm_mask = cm_series.astype(str).str.strip().str.lower().isin({"sim", "yes"})
                 updated_au = rep_aguardando[column_au].astype("object").copy()
+
                 for idx in index:
                     if idx not in cm_mask.index or not bool(cm_mask.loc[idx]):
                         continue
@@ -775,73 +588,44 @@ def build_report() -> Path:
                     year_number = int(pd.Timestamp(year_value).year)
                     formatted = f"{month_number:02d}/{year_number}"
                     updated_au.at[idx] = formatted
+
                 rep_aguardando[column_au] = updated_au
+
                 if column_av and column_av in rep_aguardando.columns:
                     non_empty_mask = (~updated_au.isna()) & (updated_au.astype(str).str.strip() != "")
                     rep_aguardando.loc[non_empty_mask, column_av] = "100%"
                     rep_aguardando.loc[~non_empty_mask, column_av] = pd.NA
 
-        if (
-            column_as
-            and column_as in rep_aguardando.columns
-            and bw_mask is not None
-            and by_series is not None
-        ):
+        if column_as and column_as in rep_aguardando.columns and bw_mask is not None and by_series is not None:
             source_values = by_series.reindex(index)
             mask = bw_mask.reindex(index, fill_value=False) & source_values.notna()
             rep_aguardando.loc[mask, column_as] = source_values[mask]
 
-        if (
-            column_aw
-            and column_aw in rep_aguardando.columns
-            and dr_series is not None
-            and cj_series is not None
-        ):
+        if column_aw and column_aw in rep_aguardando.columns and dr_series is not None and cj_series is not None:
             dr_mask = dr_series.astype(str).str.strip().str.lower().str.contains("concluid", na=False)
             override_values = cj_series.reindex(index)
             mask = dr_mask.reindex(index, fill_value=False) & override_values.notna()
             rep_aguardando.loc[mask, column_aw] = override_values[mask]
 
-    if (
-        combine_column_name
-        and not rep_aguardando.empty
-        and combine_column_name in rep_aguardando.columns
-    ):
+    if combine_column_name and not rep_aguardando.empty and combine_column_name in rep_aguardando.columns:
         siim_series = siim_series_cache.get(combine_column_name)
         if siim_series is not None:
             siim_series = siim_series.reindex(rep_aguardando.index)
             status_series = None
             if status_reference_lookup and rep_aguardando_keys is not None:
                 status_series = rep_aguardando_keys.map(status_reference_lookup).reindex(rep_aguardando.index)
-            rep_aguardando[combine_column_name] = combine_series_with_separator(
-                siim_series, status_series
-            )
+            rep_aguardando[combine_column_name] = combine_series_with_separator(siim_series, status_series)
 
-    # Marca a origem para auditoria
     rep_nao_consta["__ORIGEM__"] = "MODELO (não consta no SIIM)"
     if not rep_aguardando.empty:
         rep_aguardando["__ORIGEM__"] = "SIIM (RelNegociacao)"
 
-    # Junta e salva
     result = pd.concat([rep_aguardando, rep_nao_consta], ignore_index=True)
     result = result.drop(columns=["__ORIGEM__"], errors="ignore")
+
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
         result.to_excel(writer, sheet_name=SHEET_NAME, index=False)
 
     apply_excel_formatting(out_path, SHEET_NAME)
-    row_count = len(result.index)
-    return out_path, row_count, out_dir
 
-def main() -> int:
-    try:
-        out_path, row_count, out_dir = build_report()
-    except Exception as exc:  # noqa: BLE001
-        print(f"[ERRO] {exc}", file=sys.stderr)
-        return 1
-    print(f"[OK] Renovação gerada: {out_path}")
-    summary = [(out_path.name, row_count, str(out_path))]
-    show_generation_popup(summary, str(out_dir))
-    return 0
-
-if __name__ == "__main__":
-    sys.exit(main())
+    return out_path
