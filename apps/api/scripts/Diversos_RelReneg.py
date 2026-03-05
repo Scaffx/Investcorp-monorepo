@@ -6,21 +6,22 @@ Diversos_RelReneg.py adaptado para rodar como API no Django/Railway.
 """
 
 import os
+import sys
 import unicodedata
-from datetime import datetime
-from pathlib import Path
+from datetime import datetime, timedelta
 import pandas as pd
-import numbers
-
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
+import numbers
+from pathlib import Path
 
-# === Configurações de Caminhos para Servidor ===
+# ====== CONFIGURAÇÕES DE CAMINHOS PARA SERVIDOR ======
 BASE_DIR = Path(__file__).resolve().parent.parent
 REPORT_DIR = BASE_DIR / "reports_gerados"
+MODELOS_DIR = BASE_DIR / "modelos"
 
-# Colunas que queremos no output (mantidas do original)
+# colunas que queremos no output (ajuste se necessário)
 COLUNAS_DESEJADAS = [
     'NSEQ','ONDA','NOME LOTE','DATA LOTE CLIENTE','DATA LOTE INVEST','BANDEIRA','Empresa',
     'DENOMINACAO/ NOME','CONTRATO','CENTRO DE CUSTO','Solicitante','ENDEREÇO CLIENTE',
@@ -42,6 +43,8 @@ COLUNAS_DESEJADAS = [
     'Status','Situação','Negociador','Resp. Adm.','Data Historico','Ultimo Historico'
 ]
 
+DATE_FORMAT = "%d-%m-%Y"
+
 # ------------------------
 # UTILITÁRIOS
 # ------------------------
@@ -58,11 +61,6 @@ def sanitize_filename(name: str) -> str:
 # ESCRITA SEGURA (preserva modelo)
 # ------------------------
 def salvar_df_no_modelo_com_table(df_salvar: pd.DataFrame, output_path: str, modelo_path: str, remove_report: bool = False):
-    """
-    Carrega modelo (modelo_path), substitui o conteúdo da sheet 'Base' pelo df_salvar
-    (mantendo a sheet 'Report' e demais), recria/atualiza uma Excel Table cobrindo o intervalo,
-    e salva em output_path.
-    """
     if os.path.exists(modelo_path):
         try:
             wb = load_workbook(modelo_path)
@@ -81,13 +79,19 @@ def salvar_df_no_modelo_com_table(df_salvar: pd.DataFrame, output_path: str, mod
 
             def _to_python_value(v):
                 try:
-                    if pd.isna(v): return None
-                except Exception: pass
+                    if pd.isna(v):
+                        return None
+                except Exception:
+                    pass
                 try:
-                    if isinstance(v, pd.Timestamp): return v.to_pydatetime()
-                except Exception: pass
-                if isinstance(v, (numbers.Integral, numbers.Real, int, float)): return v
-                if isinstance(v, bool): return v
+                    if isinstance(v, pd.Timestamp):
+                        return v.to_pydatetime()
+                except Exception:
+                    pass
+                if isinstance(v, (numbers.Integral, numbers.Real, int, float)):
+                    return v
+                if isinstance(v, bool):
+                    return v
                 return v
 
             for r_idx, row in enumerate(df_salvar.itertuples(index=False, name=None), start=2):
@@ -95,7 +99,7 @@ def salvar_df_no_modelo_com_table(df_salvar: pd.DataFrame, output_path: str, mod
                     val = _to_python_value(cell_value)
                     ws.cell(row=r_idx, column=c_idx, value=val)
 
-            nrows = df_salvar.shape[0] + 1 
+            nrows = df_salvar.shape[0] + 1
             ncols = df_salvar.shape[1] if df_salvar.shape[1] > 0 else 1
             last_col = get_column_letter(ncols)
             ref = f"A1:{last_col}{nrows}"
@@ -110,11 +114,13 @@ def salvar_df_no_modelo_com_table(df_salvar: pd.DataFrame, output_path: str, mod
 
             table_name = existing_table_name or "BaseTable"
             table_name = table_name.replace(" ", "_")
+
             tbl = Table(displayName=table_name, ref=ref)
             style = TableStyleInfo(name="TableStyleMedium9", showFirstColumn=False,
                                    showLastColumn=False, showRowStripes=True, showColumnStripes=False)
             tbl.tableStyleInfo = style
             ws.add_table(tbl)
+
             wb.save(output_path)
             return True, None
         except Exception as e:
@@ -130,82 +136,77 @@ def salvar_df_no_modelo_com_table(df_salvar: pd.DataFrame, output_path: str, mod
         except Exception as e:
             return False, f"Erro ao salvar sem modelo: {e}"
 
-# ------------------------
-# FUNÇÃO PRINCIPAL ADAPTADA
-# ------------------------
-def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path: str | Path, report_name: str = "Diversos") -> Path:
+# ====== NÚCLEO ADAPTADO PARA API ======
+def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path: str | Path | None = None) -> Path:
     """
-    Recebe a lista de NSEQs, o arquivo base enviado pelo usuário e o arquivo de modelo.
+    Função principal adaptada para receber dados da API.
+    Nota: O script original do Diversos gerava vários arquivos. Para a API, 
+    vamos gerar um único arquivo consolidado com os NSEQs fornecidos, 
+    ou o primeiro arquivo gerado se houver lógica de separação.
     """
-    caminho_base = Path(negociacao_file_path)
-    caminho_modelo = Path(modelo_file_path)
-
-    if not caminho_base.exists():
-        raise FileNotFoundError(f"Arquivo base não encontrado: {caminho_base}")
-    
     if not nseq_list:
         raise ValueError("Nenhum NSEQ fornecido para processamento.")
 
-    # Limpa os NSEQs recebidos
-    nseqs_limpos = [str(n).strip() for n in nseq_list if str(n).strip()]
+    caminho_base = Path(negociacao_file_path)
+    if not caminho_base.exists():
+        raise FileNotFoundError(f"Arquivo base não encontrado: {caminho_base}")
 
+    # Lógica de definição do modelo
+    if modelo_file_path and Path(modelo_file_path).exists():
+        reference_path = Path(modelo_file_path)
+    else:
+        reference_path = MODELOS_DIR / "Report_RelReneg.xlsx"
+
+    # Carrega a base
     df = pd.read_excel(caminho_base, engine="openpyxl")
 
-    if 'NSEQ' not in df.columns:
-        raise ValueError("O arquivo Excel deve conter a coluna 'NSEQ'.")
+    if 'BANDEIRA' not in df.columns or 'NSEQ' not in df.columns:
+        raise ValueError("O arquivo Excel deve conter colunas 'BANDEIRA' e 'NSEQ'.")
 
-    # Normaliza a coluna NSEQ para string para garantir o match exato
-    df['_NSEQ_STR'] = df['NSEQ'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+    # Limpa os NSEQs recebidos
+    nseqs_int = set()
+    for n in nseq_list:
+        try:
+            nseqs_int.add(int(float(str(n).strip())))
+        except ValueError:
+            continue
 
-    # Filtra apenas os NSEQs solicitados
-    df_filtrado = df[df['_NSEQ_STR'].isin(nseqs_limpos)].copy()
+    if not nseqs_int:
+        raise ValueError("Nenhum NSEQ válido fornecido.")
+
+    # Prepara df para filtros
+    df = df.copy()
+    df['_BANDEIRA_NORM'] = df['BANDEIRA'].astype(str).apply(normalize_text)
+    df['_NSEQ_INT'] = pd.to_numeric(df['NSEQ'], errors='coerce').astype('Int64')
+
+    # Filtra pelos NSEQs fornecidos (ignora bandeira para simplificar na API, já que o usuário escolheu os NSEQs)
+    df_filtrado = df[df['_NSEQ_INT'].isin(nseqs_int)]
 
     if df_filtrado.empty:
-        raise ValueError("Nenhum dos NSEQs informados foi encontrado na planilha base.")
+        raise ValueError("Nenhum registro encontrado para os NSEQs informados.")
 
-    # Seleciona apenas as colunas desejadas que existem no DataFrame
-    colunas_presentes = [c for c in COLUNAS_DESEJADAS if c in df_filtrado.columns]
-    df_salvar = df_filtrado[colunas_presentes].copy()
+    df_salvar = df_filtrado[[c for c in COLUNAS_DESEJADAS if c in df_filtrado.columns]].copy()
 
-    # Prepara o diretório e nome do arquivo de saída
+    # Cria pasta de saída
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     agora = datetime.now()
-    fname_base = sanitize_filename(report_name)
-    output_filename = f"{fname_base}_{agora.strftime('%d%m%Y_%H%M%S')}_report.xlsx"
+    output_filename = f"Diversos_{agora.strftime('%d%m%Y_%H%M%S')}_report.xlsx"
     output_path = REPORT_DIR / output_filename
 
-    # Salva usando a função que preserva o modelo
+    # Salva o arquivo
     ok, err = salvar_df_no_modelo_com_table(
         df_salvar,
         str(output_path),
-        str(caminho_modelo),
-        remove_report=False
+        str(reference_path),
+        remove_report=False # Mantém a aba report padrão do diversos
     )
 
     if not ok:
-        # Fallback de segurança caso o modelo falhe
+        # Fallback simples
         with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
             df_salvar.to_excel(writer, index=False, sheet_name="Base")
 
-    return output_path⚠️ Ponto de Atenção para o views.py (Django)Para esse script funcionar, ele precisa do arquivo Report_RelReneg.xlsx (o modelo).
-Lembre-se de colocar esse arquivo dentro da pasta apps/api/modelos/ no seu projeto do GitHub.Quando você for chamar esse script lá no seu views.py, vai ficar assim:python1234567891011from scripts.diversos import run as gerar_diversos
-import os
-from django.conf import settings
-
-# ... dentro do seu get_excel ...
-elif report_type == 'diversos':
-    # Caminho fixo do modelo no servidor
-    caminho_modelo = os.path.join(settings.BASE_DIR, 'modelos', 'Report_RelReneg.xlsx')
-    
-    # Chama a função passando: Lista de NSEQ, Arquivo feito Upload, Arquivo Modelo
-    caminho_arquivo = gerar_diversos(nseq_list, temp_path, caminho_modelo)from scripts.diversos import run as gerar_diversos
-import os
-from django.conf import settings
-
-# ... dentro do seu get_excel ...
-elif report_type == 'diversos':
-    # Caminho fixo do modelo no servidor
-    caminho_modelo = os.path.join(settings.BASE_DIR, 'modelos', 'Report_RelReneg.xlsx')
+    return output_path
     
     # Chama a função passando: Lista de NSEQ, Arquivo feito Upload, Arquivo Modelo
     caminho_arquivo = gerar_diversos(nseq_list, temp_path, caminho_modelo)
