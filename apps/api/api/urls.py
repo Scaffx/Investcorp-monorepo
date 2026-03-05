@@ -1,4 +1,5 @@
 from django.urls import path
+from . import views
 
 from .reports_views import (
     RuleSetListCreateAPIView,
@@ -71,4 +72,9 @@ urlpatterns = [
     path("rh/indicators/", RhIndicatorsAPIView.as_view()),
     path("rh/report.xlsx", RhReportXlsxAPIView.as_view()),
     path("rh/report.pdf", RhReportPdfAPIView.as_view()),
+
+    path("health", views.health_check, name="health_check"),
+    path("scrape", views.run_scraper, name="run_scraper"),
+    path("excel", views.get_excel, name="get_excel"),
+    
 ]
