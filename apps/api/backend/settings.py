@@ -9,9 +9,11 @@ https://docs.djangoproject.com/en/6.0/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
-
+import dj_database_url
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -23,13 +25,27 @@ MEDIA_URL = "/media/"
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-ul=k+_de_axq%pg6x(c$tz#$@fm&3fhs5n@ih4($@g9sm717m='
+SECRET_KEY = os.environ.get("SECRET_KEY", "CHANGE_ME")
+DEBUG = os.environ.get("DEBUG", "False").lower() == "true"
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+ALLOWED_HOSTS = [
+    "investcorp-monorepo-production.up.railway.app",
+    "investcorpsystem.lovable.app",
+    "localhost",
+    "127.0.0.1"
+]
 
-ALLOWED_HOSTS = []
+CSRF_TRUSTED_ORIGINS = [
+    "investcorp-monorepo-production.up.railway.app",
+    "https://investcorpsystem.lovable.app"
+]
 
+
+CORS_ALLOWED_ORIGINS = [
+    "https://investcorpsystem.lovable.app",
+]
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOW_CREDENTIALS = True
 
 # Application definition
 
