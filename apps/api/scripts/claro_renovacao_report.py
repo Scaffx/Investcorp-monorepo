@@ -2,18 +2,17 @@
 # -*- coding: utf-8 -*-
 
 from pathlib import Path
-from datetime import datetime, timedelta
-import sys
+from datetime import datetime
 import re
 import unicodedata
 import pandas as pd
+import io
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
 # ====== CONFIGURAÇÕES DE CAMINHOS PARA SERVIDOR ======
 BASE_DIR = Path(__file__).resolve().parent.parent
-REPORT_DIR = BASE_DIR / "reports_gerados"
 MODELOS_DIR = BASE_DIR / "modelos"
 
 REFERENCE_SHEET_NAME = "CLARO - RENOVAÇÃO 2024"
@@ -78,6 +77,7 @@ DROP_COLUMNS_BY_LETTER: tuple[str, ...] = ("BH", "BI")
 STATUS_REFERENCE_LETTER = "AH"
 COMBINE_COLUMN_LETTER = "AI"
 COMBINE_SEPARATOR = " / "
+
 RELNEG_TO_OUTPUT_LETTER_MAP: dict[str, str] = {
     "CW": "AO",
     "CV": "AN",
@@ -211,19 +211,21 @@ def copy_from_siim(
     if series_cache is not None:
         series_cache[target] = series
 
-def apply_excel_formatting(path: Path, sheet_name: str) -> None:
-    wb = load_workbook(path)
+def apply_excel_formatting_buffer(buffer: io.BytesIO, sheet_name: str) -> io.BytesIO:
+    buffer.seek(0)
+    wb = load_workbook(buffer)
+    
     if sheet_name not in wb.sheetnames:
-        wb.save(path)
-        return
+        return buffer
+        
     ws = wb[sheet_name]
     if ws.max_row &lt; 1 or ws.max_column &lt; 1:
-        wb.save(path)
-        return
+        return buffer
     
     ws.freeze_panes = "D2"
     ws.auto_filter.ref = ws.dimensions
     ws.row_dimensions[1].height = 26
+
     header_font = Font(color="FFFFFF", bold=True)
     red_fill = PatternFill(fill_type="solid", fgColor="FF033E")
     navy_fill = PatternFill(fill_type="solid", fgColor="00008B")
@@ -259,18 +261,11 @@ def apply_excel_formatting(path: Path, sheet_name: str) -> None:
                     max_length = len(part)
         width = min(max(max_length + 2, 12), 60)
         ws.column_dimensions[get_column_letter(col_idx)].width = width
-    wb.save(path)
 
-def read_siim_df(path: Path | str) -> pd.DataFrame:
-    path_obj = Path(path)
-    if not path_obj.exists():
-        raise FileNotFoundError(f"Arquivo de entrada (SIIM) não encontrado: {path_obj}")
-    if path_obj.suffix.lower() in (".xlsx", ".xls"):
-        return pd.read_excel(path_obj)
-    df = pd.read_csv(path_obj, sep=";", encoding="utf-8", engine="python")
-    if df.shape[1] == 1:
-        df = pd.read_csv(path_obj, sep=",", encoding="utf-8", engine="python")
-    return df
+    new_buffer = io.BytesIO()
+    wb.save(new_buffer)
+    new_buffer.seek(0)
+    return new_buffer
 
 def detect_nao_consta_rows(df: pd.DataFrame) -> pd.Series:
     mask = pd.Series(False, index=df.index)
@@ -280,25 +275,23 @@ def detect_nao_consta_rows(df: pd.DataFrame) -> pd.Series:
     return mask
 
 # ====== NÚCLEO ADAPTADO PARA API ======
-def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path: str | Path | None = None) -> Path:
+def processar_relatorio_claro_renovacao(arquivo_excel_em_memoria, nseq_string: str, arquivo_modelo_em_memoria=None) -> io.BytesIO:
     """
     Função principal adaptada para receber dados da API.
     O modelo é opcional. Se não for fornecido, cria um DataFrame vazio como base.
     """
-    if not nseq_list:
+    if not nseq_string:
         raise ValueError("Nenhum NSEQ fornecido para processamento.")
 
-    # Limpa e normaliza os NSEQs recebidos
+    # 1. Limpa e normaliza os NSEQs recebidos
+    nseq_list = [n.strip() for n in nseq_string.split(',') if n.strip()]
     rules = [normalize_key_token(n) for n in nseq_list if normalize_key_token(n)]
     rules_set = set(rules)
     order_map = {value: idx for idx, value in enumerate(rules)}
 
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    agora = datetime.now()
-    out_path = REPORT_DIR / f"CLARO_RENOVACAO_{agora.strftime('%d%m%Y_%H%M%S')}.xlsx"
-
-    # Carrega SIIM do arquivo enviado pelo frontend
-    siim_df = read_siim_df(negociacao_file_path)
+    # 2. Carrega SIIM do arquivo enviado pelo frontend
+    arquivo_excel_em_memoria.seek(0)
+    siim_df = pd.read_excel(arquivo_excel_em_memoria)
     siim_df.columns = [str(c).strip() for c in siim_df.columns]
     siim_letter_map = build_letter_column_map(list(siim_df.columns))
 
@@ -309,16 +302,14 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
     siim_df["__key_norm"] = siim_df[key_col].map(normalize_key_token)
     siim_df["__key_display"] = siim_df[key_col].map(format_key_display)
 
-    # 
-    # LÓGICA DO MODELO OPCIONAL
-    # 
+    # 3. LÓGICA DO MODELO OPCIONAL
     reference_df = pd.DataFrame() # Começa vazio
     
-    if modelo_file_path and Path(modelo_file_path).exists():
-        reference_file = Path(modelo_file_path)
+    if arquivo_modelo_em_memoria:
+        arquivo_modelo_em_memoria.seek(0)
         try:
             reference_df = pd.read_excel(
-                reference_file,
+                arquivo_modelo_em_memoria,
                 sheet_name=REFERENCE_SHEET_NAME,
                 header=REFERENCE_HEADER_ROW,
             )
@@ -343,11 +334,10 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
     # Se não conseguimos carregar nenhum modelo, criamos um DataFrame vazio com as colunas prioritárias
     if reference_df.empty:
         reference_df = pd.DataFrame(columns=REFERENCE_PRIORITY_COLUMNS + ["NSEQ - Siim"])
-    # 
 
+    # 4. Processamento Principal
     reference_columns = list(reference_df.columns)
     reference_letter_map = build_letter_column_map(reference_columns)
-
     combine_column_name = reference_letter_map.get(COMBINE_COLUMN_LETTER)
     status_reference_column_name = reference_letter_map.get(STATUS_REFERENCE_LETTER)
 
@@ -386,7 +376,6 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
 
     ref_keys_series = pd.Series(dtype="object", index=ref_aguardando.index)
     ref_keys_unique: list[str] = []
-
     if ref_key_col is not None:
         ref_keys_series = ref_aguardando[ref_key_col].map(normalize_key_token).fillna("")
         seen_ref_keys: set[str] = set()
@@ -439,7 +428,6 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
 
         situacao_col = find_column(siim_part, "SITUACAO") or find_column(siim_part, "STATUS")
         concluido_mask: pd.Series | None = None
-
         if situacao_col is not None:
             situacao_series = siim_part[situacao_col].map(normalize_text_value)
             concluido_mask = situacao_series.str.contains("concluid", na=False)
@@ -456,7 +444,6 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
         if not ref_aguardando.empty:
             ref_aug = ref_aguardando.copy()
             ref_aug["__key_norm"] = ref_keys_series.reindex(ref_aug.index).fillna("")
-
             for col in ref_aug.columns:
                 if col == "__key_norm":
                     continue
@@ -468,7 +455,6 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
                     continue
                 series_map = ref_aug.set_index("__key_norm")[col]
                 mapped = siim_part["__key_norm"].map(series_map)
-
                 if col not in rep_aguardando.columns:
                     rep_aguardando[col] = mapped
                 else:
@@ -507,6 +493,9 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
     rep_nao_consta = ensure_columns(rep_nao_consta, final_cols)
     rep_aguardando = ensure_columns(rep_aguardando, final_cols) if not rep_aguardando.empty else pd.DataFrame(columns=final_cols)
 
+    # 
+    # CÁLCULOS COMPLEXOS DE COLUNAS (AQUI ONDE CORTOU)
+    # 
     if not rep_aguardando.empty and siim_part_for_output is not None:
         index = rep_aguardando.index
 
@@ -582,8 +571,10 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
                         continue
                     month_value = month_series.loc[idx]
                     year_value = year_series.loc[idx]
+
                     if pd.isna(month_value) or pd.isna(year_value):
                         continue
+
                     month_number = int(pd.Timestamp(month_value).month)
                     year_number = int(pd.Timestamp(year_value).year)
                     formatted = f"{month_number:02d}/{year_number}"
@@ -616,6 +607,7 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
                 status_series = rep_aguardando_keys.map(status_reference_lookup).reindex(rep_aguardando.index)
             rep_aguardando[combine_column_name] = combine_series_with_separator(siim_series, status_series)
 
+    # 5. Finalização e Concatenação
     rep_nao_consta["__ORIGEM__"] = "MODELO (não consta no SIIM)"
     if not rep_aguardando.empty:
         rep_aguardando["__ORIGEM__"] = "SIIM (RelNegociacao)"
@@ -623,9 +615,11 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
     result = pd.concat([rep_aguardando, rep_nao_consta], ignore_index=True)
     result = result.drop(columns=["__ORIGEM__"], errors="ignore")
 
-    with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+    # 6. Salvar e Formatar em Memória
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
         result.to_excel(writer, sheet_name=SHEET_NAME, index=False)
 
-    apply_excel_formatting(out_path, SHEET_NAME)
+    output_formatado = apply_excel_formatting_buffer(output, SHEET_NAME)
 
-    return out_path
+    return output_formatado
