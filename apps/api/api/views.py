@@ -19,6 +19,9 @@ def health_check(request):
 @api_view(['POST'])
 @parser_classes([MultiPartParser, FormParser])
 def get_excel(request):
+    print("=== REQUISIÇÃO CHEGOU NO DJANGO ===")
+    print("DADOS (Texto):", request.data)
+    print("ARQUIVOS:", request.FILES)
     """Recebe a planilha do frontend, roteia para o script correto e devolve o Excel"""
     
     try:
@@ -27,13 +30,16 @@ def get_excel(request):
         nseq = request.data.get('nseq', '')
         planilha_renegociacao = request.FILES.get('planilha_renegociacao')
         
+        print(f"Tipo: {report_type} | NSEQ: {nseq} | Planilha: {planilha_renegociacao}")
+        
         # Validações iniciais
         if not planilha_renegociacao:
+            print("ERRO: Planilha não encontrada no request.FILES")
             return Response({"error": "A planilha de renegociação não foi enviada."}, status=400)
+        
         if not nseq:
+            print("ERRO: NSEQ vazio")
             return Response({"error": "Nenhum NSEQ foi informado."}, status=400)
-        if not report_type:
-            return Response({"error": "Tipo de relatório não informado."}, status=400)
 
         # ==========================================
         # ROTEAMENTO (O Maestro)
