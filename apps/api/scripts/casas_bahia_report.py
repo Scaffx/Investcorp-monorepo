@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
 Casas Bahia Report - Adaptado para API Django/Railway
 """
-
 from __future__ import annotations
 
+import io
 import re
 import unicodedata
+import numbers
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,20 +19,44 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
-# Cole esta função ANTES da linha que está dando erro:
+# =========================
+# FUNÇÕES DE NORMALIZAÇÃO
+# =========================
 def normalize_value(value: str | numbers.Number | None) -> str:
     if value is None:
         return ""
-    text = str(value).strip()
+    
+    if isinstance(value, str):
+        text = value.strip()
+    else:
+        if pd.isna(value):
+            return ""
+        if isinstance(value, float):
+            if value.is_integer():
+                text = str(int(value))
+            else:
+                text = format(value, "g")
+        elif isinstance(value, int):
+            text = str(value)
+        else:
+            text = str(value).strip()
+
+    if not text:
+        return ""
+
     text = unicodedata.normalize("NFKD", text)
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     return re.sub(r"[^A-Za-z0-9]", "", text).upper()
 
+def normalize_nseq_value(value: object) -> str:
+    text = normalize_value(value)
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits or text
+
 # =========================
-# CONFIGURAÇÕES DE PASTA (SERVIDOR)
+# CONFIGURAÇÕES GERAIS
 # =========================
 BASE_DIR = Path(__file__).resolve().parent.parent
-REPORT_DIR = BASE_DIR / "reports_gerados"
 MODELOS_DIR = BASE_DIR / "modelos"
 
 DEFAULT_SHEET_NAME = "BASE_CASAS_BAHIA"
@@ -93,37 +117,36 @@ DATE_COLUMNS = [
 ]
 
 DATE_COLUMNS_NORM = {normalize_value(name) for name in DATE_COLUMNS}
+
 RELNEG_ONLY_COLUMNS = {"MOTIVO RECUSADO", "NEGOCIAÇÃO FINALIZADA", "FIM NEGOCIAÇÃO"}
 RELNEG_ONLY_COLUMNS_NORM = {normalize_value(name) for name in RELNEG_ONLY_COLUMNS}
 
-def normalize_value(value: object) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        text = value.strip()
-    else:
-        if pd.isna(value):
-            return ""
-        if isinstance(value, float):
-            if value.is_integer():
-                text = str(int(value))
-            else:
-                text = format(value, "g")
-        elif isinstance(value, int):
-            text = str(value)
-        else:
-            text = str(value).strip()
-    if not text:
-        return ""
-    text = unicodedata.normalize("NFKD", text)
-    text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    return text.upper()
+COLUMN_ALIASES: Dict[str, List[str]] = {
+    "NSEQ": ["NSEQ", "NSEQ_ESCOLHIDO"],
+    "CONTRATO": ["CONTRATO"],
+    "JUNÇÃO": ["JUNÇÃO", "JUNCAO", "CHAVE"],
+    "CENTRO DE CUSTO": ["CENTRO DE CUSTO", "CENTRODECUSTO", "CC"],
+}
 
-def normalize_nseq_value(value: object) -> str:
-    text = normalize_value(value)
-    digits = "".join(ch for ch in text if ch.isdigit())
-    return digits or text
+COLUMN_ALIAS_MAP: Dict[str, str] = {}
+for canonical, aliases in COLUMN_ALIASES.items():
+    canonical_norm = normalize_value(canonical)
+    COLUMN_ALIAS_MAP[canonical_norm] = canonical_norm
+    for alias in aliases:
+        COLUMN_ALIAS_MAP[normalize_value(alias)] = canonical_norm
 
+DEFAULT_RULE_COLUMNS = ["NSEQ", "Junção", "CONTRATO", "CENTRO DE CUSTO"]
+DEFAULT_RULE_COLUMNS_NORM = [normalize_value(col) for col in DEFAULT_RULE_COLUMNS]
+
+@dataclass(frozen=True)
+class Rule:
+    raw: str
+    normalized: str
+    columns: Optional[Sequence[str]] = None
+
+# =========================
+# FUNÇÕES AUXILIARES
+# =========================
 def is_final_status_value(value: object) -> bool:
     norm = normalize_value(value)
     if not norm:
@@ -161,44 +184,31 @@ def format_date_string(value: object) -> str:
         except Exception:
             return str(value)
 
-COLUMN_ALIASES: Dict[str, List[str]] = {
-    "NSEQ": ["NSEQ", "NSEQ_ESCOLHIDO"],
-    "CONTRATO": ["CONTRATO"],
-    "JUNÇÃO": ["JUNÇÃO", "JUNCAO", "CHAVE"],
-    "CENTRO DE CUSTO": ["CENTRO DE CUSTO", "CENTRODECUSTO", "CC"],
-}
-
-COLUMN_ALIAS_MAP: Dict[str, str] = {}
-for canonical, aliases in COLUMN_ALIASES.items():
-    canonical_norm = normalize_value(canonical)
-    COLUMN_ALIAS_MAP[canonical_norm] = canonical_norm
-    for alias in aliases:
-        COLUMN_ALIAS_MAP[normalize_value(alias)] = canonical_norm
-
-DEFAULT_RULE_COLUMNS = ["NSEQ", "Junção", "CONTRATO", "CENTRO DE CUSTO"]
-DEFAULT_RULE_COLUMNS_NORM = [normalize_value(col) for col in DEFAULT_RULE_COLUMNS]
-
-@dataclass(frozen=True)
-class Rule:
-    raw: str
-    normalized: str
-    columns: Optional[Sequence[str]] = None
-
-def load_spec(spec_path: Path, sheet_name: str = DEFAULT_SHEET_NAME):
-    xl = pd.ExcelFile(spec_path)
+def load_spec(spec_file, sheet_name: str = DEFAULT_SHEET_NAME):
+    # Se for um arquivo em memória, garante que está lendo do começo
+    if hasattr(spec_file, 'seek'):
+        spec_file.seek(0)
+        
+    xl = pd.ExcelFile(spec_file)
     if sheet_name not in xl.sheet_names:
-        raise ValueError(f'Aba "{sheet_name}" não encontrada em {spec_path.name}.')
-    spec_df = pd.read_excel(spec_path, sheet_name=sheet_name)
+        raise ValueError(f'Aba "{sheet_name}" não encontrada no arquivo de modelo.')
+    
+    if hasattr(spec_file, 'seek'):
+        spec_file.seek(0)
+        
+    spec_df = pd.read_excel(spec_file, sheet_name=sheet_name)
     header_map = spec_df.iloc[0].to_dict()
     final_order = list(header_map.values())
     ref_df = spec_df.iloc[1:].reset_index(drop=True)
     return header_map, final_order, ref_df
 
-def load_reference_report(spec_path: Path) -> pd.DataFrame:
+def load_reference_report(spec_file) -> pd.DataFrame:
     try:
-        return pd.read_excel(spec_path, header=1)
+        if hasattr(spec_file, 'seek'):
+            spec_file.seek(0)
+        return pd.read_excel(spec_file, header=1)
     except Exception as exc:
-        raise RuntimeError(f"Não foi possível ler o report base '{spec_path.name}': {exc}") from exc
+        raise RuntimeError(f"Não foi possível ler o report base: {exc}") from exc
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -288,9 +298,10 @@ def build_report(
         final_df = pd.DataFrame(index=rule_keys, columns=final_order, dtype=object)
     else:
         final_df = final_df[final_order].copy()
-    final_df = final_df.astype(object)
 
+    final_df = final_df.astype(object)
     relneg_indexed = relneg_named.reindex(rule_keys)
+
     for col in final_order:
         if col not in relneg_indexed.columns:
             continue
@@ -380,9 +391,9 @@ def filter_by_rules(df: pd.DataFrame, rules: Sequence[Rule]) -> pd.DataFrame:
 
         desired_norms = list(rule.columns or [])
         desired_norms.extend(DEFAULT_RULE_COLUMNS_NORM)
+
         candidate_columns: List[str] = []
         seen_norms: Set[str] = set()
-
         for col_norm in desired_norms:
             if not col_norm or col_norm in seen_norms:
                 continue
@@ -419,18 +430,21 @@ def filter_by_rules(df: pd.DataFrame, rules: Sequence[Rule]) -> pd.DataFrame:
     ordered_indices = [idx for idx, _ in selected]
     return df.loc[ordered_indices].reset_index(drop=True)
 
-def apply_excel_formatting(path: Path, sheet_name: str) -> None:
-    wb = load_workbook(path)
+def apply_excel_formatting_buffer(buffer: io.BytesIO, sheet_name: str) -> io.BytesIO:
+    """Aplica formatação openpyxl diretamente no buffer de memória."""
+    buffer.seek(0)
+    wb = load_workbook(buffer)
+    
     if sheet_name not in wb.sheetnames:
-        wb.save(path)
-        return
+        return buffer
+        
     ws = wb[sheet_name]
     if ws.max_row < 1 or ws.max_column < 1:
-        wb.save(path)
-        return
+        return buffer
 
     ws.auto_filter.ref = ws.dimensions
     ws.freeze_panes = "E2"
+
     header_fill = PatternFill(fill_type="solid", fgColor="4472C4")
     header_font = Font(color="FFFFFF", bold=True)
     odd_fill = PatternFill(fill_type="solid", fgColor="D9E1F2")
@@ -459,31 +473,38 @@ def apply_excel_formatting(path: Path, sheet_name: str) -> None:
                 max_length = len(value)
         width = min(max(max_length + 2, 12), 60)
         ws.column_dimensions[get_column_letter(col_idx)].width = width
-    wb.save(path)
 
-# ====== NÚCLEO ADAPTADO PARA API ======
-def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path: str | Path | None = None) -> Path:
+    new_buffer = io.BytesIO()
+    wb.save(new_buffer)
+    new_buffer.seek(0)
+    return new_buffer
+
+# =========================
+# NÚCLEO ADAPTADO PARA API
+# =========================
+def processar_relatorio_casas_bahia(arquivo_excel_em_memoria, nseq_string: str, arquivo_modelo_em_memoria=None) -> io.BytesIO:
     """
-    Função principal adaptada para receber dados da API.
+    Recebe o arquivo em memória, a string de NSEQs e o modelo opcional.
     """
+    # 1. Tratar a string de NSEQs
+    nseq_list = [n.strip() for n in nseq_string.split(',') if n.strip()]
     if not nseq_list:
         raise ValueError("Nenhum NSEQ fornecido para processamento.")
 
-    # 1. Definir o arquivo de modelo (Spec)
-    if modelo_file_path and Path(modelo_file_path).exists():
-        spec_path = Path(modelo_file_path)
+    # 2. Definir o arquivo de modelo (Spec)
+    # Se o usuário enviou o modelo pela tela, usa ele. Se não, busca no servidor.
+    if arquivo_modelo_em_memoria:
+        spec_file = arquivo_modelo_em_memoria
     else:
-        # Tenta achar pelo padrão caso o usuário não tenha enviado
         candidates = sorted(MODELOS_DIR.glob("CASAS_BAHIA_*report*.xlsx"))
         if candidates:
-            spec_path = candidates[0]
+            spec_file = candidates[0]
         else:
-            # Fallback final
-            spec_path = MODELOS_DIR / "CASAS_BAHIA_21102025_REPORT - Criação report.xlsx"
-            if not spec_path.exists():
-                raise FileNotFoundError("Planilha de modelo da Casas Bahia não encontrada.")
+            spec_file = MODELOS_DIR / "CASAS_BAHIA_21102025_REPORT - Criação report.xlsx"
+            if not spec_file.exists():
+                raise FileNotFoundError("Planilha de modelo não foi anexada na tela e não existe no servidor.")
 
-    # 2. Criar objetos Rule a partir da lista de NSEQs
+    # 3. Criar objetos Rule a partir da lista de NSEQs
     rules = []
     for nseq in nseq_list:
         norm = normalize_value(nseq)
@@ -493,37 +514,24 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
     if not rules:
         raise ValueError("Nenhum NSEQ válido após normalização.")
 
-    # 3. Carregar especificações do modelo
-    header_map, final_order, ref_df = load_spec(spec_path)
-    base_report_df = load_reference_report(spec_path)
+    # 4. Carregar especificações do modelo
+    header_map, final_order, ref_df = load_spec(spec_file)
+    base_report_df = load_reference_report(spec_file)
 
-    # 4. Carregar Planilha de Renegociação enviada
-    input_path = Path(negociacao_file_path)
-    if not input_path.exists():
-        raise FileNotFoundError("Arquivo de RelNegociacao não encontrado.")
-
-    if input_path.suffix.lower() in {".xlsx", ".xls"}:
-        input_df = pd.read_excel(input_path, sheet_name=0)
-    else:
-        input_df = pd.read_csv(input_path, sep=";", encoding="utf-8", engine="python")
-        if input_df.shape[1] == 1:
-            input_df = pd.read_csv(input_path, sep=",", encoding="utf-8", engine="python")
-
+    # 5. Carregar Planilha de Renegociação enviada (direto da memória)
+    input_df = pd.read_excel(arquivo_excel_em_memoria, sheet_name=0)
     input_df = normalize_columns(input_df)
 
-    # 5. Filtrar e Construir o Report
+    # 6. Filtrar e Construir o Report
     filtered_df = filter_by_rules(input_df, rules)
     report_df = build_report(header_map, final_order, filtered_df, base_report_df, rules, ref_df)
     report_df = report_df.drop(columns=["NSEQ"], errors="ignore")
 
-    # 6. Salvar e Formatar
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    agora = datetime.now()
-    out_path = REPORT_DIR / f"Report_Casas_Bahia_{agora.strftime('%d%m%Y_%H%M%S')}.xlsx"
-
-    with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+    # 7. Salvar e Formatar em Memória
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
         report_df.to_excel(writer, sheet_name=OUTPUT_SHEET_NAME, index=False)
+    
+    output_formatado = apply_excel_formatting_buffer(output, OUTPUT_SHEET_NAME)
 
-    apply_excel_formatting(out_path, OUTPUT_SHEET_NAME)
-
-    return out_path
+    return output_formatado
