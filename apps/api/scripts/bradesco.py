@@ -1,40 +1,22 @@
-﻿#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-Geração do relatório Bradesco com popup final e abertura automática da pasta.
-"""
-
-from __future__ import annotations
-
-from pathlib import Path
-from datetime import datetime, timedelta
-import logging
-import numbers
+import io
 import re
-import sys
+import unicodedata
+import numbers
+import logging
 from collections import defaultdict
 from difflib import get_close_matches
 from typing import Iterable
 
 import pandas as pd
-import unicodedata
-from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Border, Side
 
-try:
-    from .utils import show_generation_popup
-except ImportError:  # Script executed directly without package context
-    sys.path.append(str(Path(__file__).resolve().parent))
-    from utils import show_generation_popup  # type: ignore[import-not-found]
+# Configuração de Logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+log = logging.getLogger(__name__)
 
-# === Configurações ===
-DESKTOP = Path.home() / "Desktop"
-REPORT_DIR = DESKTOP / "Report"
-REGRAS_DIR = REPORT_DIR / "REGRAS"
-MODELOS_DIR = REPORT_DIR / "Modelos"
-REGRAS_FILENAME = REGRAS_DIR / "Bradesco_regras.txt"
-NEGOCIACAO_FILENAME = MODELOS_DIR / "RelNegociacao.xlsx"
+# ==========================================
+# 1. CONSTANTES E MAPEAMENTOS
+# ==========================================
 
 FINAL_ORDER_BRADESCO = [
     "LINHA (NSEQ)", "PROJETO", "BANDEIRA", "CHAVE", "ONDA", "DATA LOTE CLIENTE", "DATA LOTE INVEST",
@@ -82,15 +64,6 @@ RELNEG_TO_OUTPUT_COLUMN_MAP: dict[str, list[str]] = {
     "CZ": ["CV"],
 }
 
-# Tabela de aliases adicionais (podemos ampliar conforme necessidade)
-def normalize_key(value: str | numbers.Number | None) -> str:
-    if value is None:
-        return ""
-    text = str(value).strip()
-    text = unicodedata.normalize("NFKD", text)
-    text = "".join(ch for ch in text if not unicodedata.combining(ch))
-    return re.sub(r"[^A-Za-z0-9]", "", text).upper()
-
 RAW_COLUMN_ALIASES: dict[str, list[str]] = {
     "LINHA (NSEQ)": ["NSEQ", "LINHA"],
     "ALUGUEL BASELINE": ["ALUGUEL DEVIDO"],
@@ -112,14 +85,24 @@ RAW_COLUMN_ALIASES: dict[str, list[str]] = {
     "Economia até  12 meses - Limitador do índice": ["Economia ate  12 meses - Limitador do indice", "Economia ate 12 meses - Limitador do indice"],
 }
 
+# ==========================================
+# 2. FUNÇÕES AUXILIARES
+# ==========================================
+
+def normalize_key(value: str | numbers.Number | None) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return re.sub(r"[^A-Za-z0-9]", "", text).upper()
+
 COLUMN_ALIASES: dict[str, list[str]] = {
     normalize_key(key): [normalize_key(alias) for alias in aliases]
     for key, aliases in RAW_COLUMN_ALIASES.items()
 }
 
-
 def excel_index_to_letter(index: int) -> str:
-    """Convert a 1-based column index to the corresponding Excel column letter."""
     if index <= 0:
         raise ValueError("Excel column index must be positive.")
     letters = ""
@@ -128,19 +111,10 @@ def excel_index_to_letter(index: int) -> str:
         letters = chr(65 + remainder) + letters
     return letters
 
-
 FINAL_ORDER_BY_LETTER: dict[str, str] = {
     excel_index_to_letter(idx): column
     for idx, column in enumerate(FINAL_ORDER_BRADESCO, start=1)
 }
-
-# Logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-log = logging.getLogger(__name__)
-
-
-# === Popup final ===
-# === Funções auxiliares ===
 
 def to_clean_string(value: object) -> str:
     if pd.isna(value):
@@ -149,113 +123,31 @@ def to_clean_string(value: object) -> str:
         return format(value, "g").strip()
     return str(value).strip()
 
-
-def split_rule_line(line: str) -> list[str]:
-    return [token for token in re.split(r"[;, \t]+", line.strip()) if token]
-
-
-def load_rule_pairs(path: Path) -> list[tuple[str | None, str]]:
-    if not path.exists():
-        raise FileNotFoundError(f"Arquivo de regras não encontrado: {path}")
-    pairs: list[tuple[str | None, str]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line or line.startswith("#"):
-                continue
-            tokens = split_rule_line(line)
-            if not tokens:
-                continue
-            first = tokens[0]
-            if first.isdigit():
-                order_label = first
-                tokens = tokens[1:]
-            else:
-                order_label = None
-            for token in tokens:
-                digits = re.sub(r"\D", "", token)
-                if digits:
-                    pairs.append((order_label, digits))
-    return pairs
-
-
 def extrair_dados_locador(valor: object) -> dict[str, str]:
-    """
-    Extrai informações básicas do bloco "dados locador (a)".
-    """
     if not isinstance(valor, str):
         return {}
     texto = unicodedata.normalize("NFKD", valor)
     texto = texto.replace("\r", "\n")
     resultado: dict[str, str] = {}
-
+    
     email_match = re.search(r"[\w\.-]+@[\w\.-]+", texto)
     if email_match:
         resultado["email"] = email_match.group(0)
-
+        
     doc_match = re.search(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}|\d{11}", re.sub(r"[^\d/@.-]", "", texto))
     if doc_match:
         resultado["documento"] = doc_match.group(0)
-
+        
     tel_match = re.search(r"\(?\d{2}\)?\s?\d{4,5}-?\d{4}", texto)
     if tel_match:
         resultado["telefone"] = tel_match.group(0)
-
-    # Nome provável: linha inicial até quebra
+        
     linhas = [ln.strip() for ln in texto.splitlines() if ln.strip()]
     if linhas:
         resultado["nome"] = linhas[0]
+        
     return resultado
 
-
-def aplicar_coloracao(path_excel: Path) -> None:
-    cinza = PatternFill(start_color="c6c6c6", end_color="c6c6c6", fill_type="solid")
-    azul = PatternFill(start_color="00008b", end_color="00008b", fill_type="solid")
-    azul_claro = PatternFill(start_color="21abcd", end_color="21abcd", fill_type="solid")
-    preto = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
-    cinza_escuro = PatternFill(start_color="a0a0a0", end_color="a0a0a0", fill_type="solid")
-
-    faixas = [
-        (1, 12, cinza), (13, 22, preto), (23, 23, cinza), (24, 26, azul),
-        (27, 30, cinza), (31, 34, azul), (35, 36, cinza), (37, 38, azul),
-        (39, 49, cinza), (50, 52, azul), (53, 58, cinza), (59, 59, azul),
-        (60, 60, cinza), (61, 62, azul), (63, 64, cinza), (65, 67, azul),
-        (68, 68, cinza), (69, 69, azul), (70, 74, cinza), (75, 90, azul),
-        (91, 92, azul_claro), (93, 93, cinza_escuro), (94, 95, azul_claro), (96, 97, cinza_escuro),
-        (98, 98, azul), (99, 100, cinza), (101, 102, azul_claro), (103, 104, cinza_escuro),
-        (105, 106, azul_claro), (107, 107, cinza_escuro), (108, 108, azul),
-        (109, 110, cinza_escuro), (111, 112, azul_claro), (113, 113, cinza_escuro),
-        (114, 114, azul_claro), (115, 116, cinza_escuro), (117, 118, azul_claro),
-        (119, 119, cinza_escuro), (120, 121, azul_claro), (122, 122, cinza_escuro),
-        (123, 144, azul_claro)
-    ]
-
-    wb = load_workbook(path_excel)
-    ws = wb.active
-
-    for start, end, color in faixas:
-        for col in range(start, end + 1):
-            ws.cell(row=1, column=col).fill = color
-
-    for col in range(1, ws.max_column + 1):
-        cell = ws.cell(row=1, column=col)
-        if cell.value is not None and str(cell.value).strip():
-            cell.font = Font(color="FFFFFF", bold=True)
-
-    ws.freeze_panes = "M1"
-    ws.auto_filter.ref = ws.dimensions
-
-    thin = Side(style="thin", color="000000")
-    border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
-    for r in range(1, ws.max_row + 1):
-        for c in range(1, ws.max_column + 1):
-            ws.cell(row=r, column=c).border = border_all
-
-    ws.sheet_view.showGridLines = True
-    wb.save(path_excel)
-
-
-# === Núcleo ===
 def _best_column_match(normalized_columns: dict[str, list[str]], target: str) -> str | None:
     keys = [key for key, cols in normalized_columns.items() if cols]
     if not keys:
@@ -265,57 +157,82 @@ def _best_column_match(normalized_columns: dict[str, list[str]], target: str) ->
         return normalized_columns[match[0]].pop(0)
     return None
 
-
 def _normalize_mapping(columns: Iterable[str]) -> dict[str, list[str]]:
     mapping: defaultdict[str, list[str]] = defaultdict(list)
     for column in columns:
         mapping[normalize_key(column)].append(column)
     return mapping
 
+def parse_currency_to_float(value: object) -> float:
+    text = to_clean_string(value).replace("R$", "").strip()
+    if not text:
+        return 0.0
+    normalized = text.replace(".", "").replace(",", ".").replace(" ", "")
+    try:
+        return float(normalized)
+    except ValueError:
+        digits = re.findall(r"-?\d+(?:[.,]\d+)?", text)
+        if digits:
+            try:
+                return float(digits[0].replace(",", "."))
+            except ValueError:
+                return 0.0
+    return 0.0
 
-def run() -> Path:
-    if not NEGOCIACAO_FILENAME.exists():
-        raise FileNotFoundError(f"Arquivo {NEGOCIACAO_FILENAME} não encontrado")
-    if not REGRAS_FILENAME.exists():
-        raise FileNotFoundError(f"Arquivo de regras {REGRAS_FILENAME} não encontrado")
+def format_currency_value(value: object) -> str:
+    text = to_clean_string(value)
+    if not text:
+        return ""
+    cleaned = text.replace("R$", "").strip()
+    return f"R$ {cleaned}" if cleaned else "R$"
 
-    regras_brutas = load_rule_pairs(REGRAS_FILENAME)
-    if not regras_brutas:
-        raise ValueError("Nenhuma regra de NSEQ encontrada no arquivo informado.")
+# ==========================================
+# 3. FUNÇÃO PRINCIPAL (MOTOR DE DADOS)
+# ==========================================
 
-    nseq_ordenados = [item[1] for item in regras_brutas]
-    linha_por_nseq = {}
-    ordem_map: dict[str, int] = {}
-    for idx, (linha, nseq) in enumerate(regras_brutas):
-        ordem_map.setdefault(nseq, idx)
-        linha_por_nseq.setdefault(nseq, linha or str(idx + 1))
+def processar_relatorio_bradesco(arquivo_excel_em_memoria, nseq_string: str) -> io.BytesIO:
+    """
+    Processa a planilha de renegociação filtrando pelos NSEQs informados,
+    aplica as regras de negócio e retorna um buffer de memória com o Excel formatado.
+    """
+    # 1. Preparar os NSEQs recebidos do frontend (substitui a leitura do TXT)
+    nseq_ordenados = [str(n).strip() for n in nseq_string.split(',') if str(n).strip()]
+    if not nseq_ordenados:
+        raise ValueError("Nenhum NSEQ foi informado para gerar o relatório.")
 
-    log.info("Total de NSEQ carregados: %s", len(nseq_ordenados))
+    # Simula a ordem e a linha_regra que antes vinham do TXT
+    ordem_map = {nseq: idx for idx, nseq in enumerate(nseq_ordenados)}
+    linha_por_nseq = {nseq: str(idx + 1) for idx, nseq in enumerate(nseq_ordenados)}
 
-    df_neg = pd.read_excel(NEGOCIACAO_FILENAME, dtype=str, engine="openpyxl").fillna("")
+    log.info("Total de NSEQ recebidos: %s", len(nseq_ordenados))
+
+    # 2. Ler o arquivo diretamente da memória
+    df_neg = pd.read_excel(arquivo_excel_em_memoria, dtype=str, engine="openpyxl").fillna("")
     df_neg.columns = df_neg.columns.str.strip().str.lower()
+
     column_letter_map = {
         excel_index_to_letter(idx): column
         for idx, column in enumerate(df_neg.columns, start=1)
     }
 
     if "nseq" not in df_neg.columns:
-        raise ValueError("Coluna 'nseq' não encontrada")
+        raise ValueError("Coluna 'nseq' não encontrada na planilha anexada.")
+
     if "centro de custo" not in df_neg.columns and "chave" not in df_neg.columns:
-        raise ValueError("Coluna de chave (centro de custo ou chave) não encontrada")
+        raise ValueError("Coluna de chave (centro de custo ou chave) não encontrada.")
 
     if "chave" not in df_neg.columns:
         df_neg = df_neg.rename(columns={"centro de custo": "chave"})
 
     df_neg["chave"] = df_neg["chave"].astype(str).str.strip().str.upper()
-    df_neg["nseq"] = (
-        df_neg["nseq"].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
-    )
+    df_neg["nseq"] = df_neg["nseq"].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
 
+    # 3. Filtrar e Ordenar
     nseq_lookup = set(nseq_ordenados)
     df_filtrado = df_neg[df_neg["nseq"].isin(nseq_lookup)].copy()
+
     if df_filtrado.empty:
-        raise ValueError("Nenhum NSEQ correspondente encontrado.")
+        raise ValueError("Nenhum dos NSEQs informados foi encontrado na planilha anexada.")
 
     df_filtrado["ordem"] = df_filtrado["nseq"].map(ordem_map)
     df_filtrado = df_filtrado.dropna(subset=["ordem"]).sort_values(by="ordem")
@@ -327,11 +244,13 @@ def run() -> Path:
 
     preenchimento = df_neg.replace("", pd.NA).notna().sum(axis=1)
     df_neg["__row_quality"] = preenchimento
+
     df_base = (
         df_neg.sort_values(["chave", "__row_quality"], ascending=[True, False])
         .drop_duplicates(subset="chave", keep="first")
         .drop(columns="__row_quality", errors="ignore")
     )
+
     df_base_sem_nseq = df_base.drop(columns=["nseq"], errors="ignore")
 
     df_merged = pd.merge(
@@ -341,6 +260,7 @@ def run() -> Path:
         how="left",
     )
 
+    # 4. Mapeamento de Colunas
     normalized_columns = _normalize_mapping(df_merged.columns)
     ordered_series = []
     missing_columns = []
@@ -348,9 +268,9 @@ def run() -> Path:
     for target_col in FINAL_ORDER_BRADESCO:
         norm_target = normalize_key(target_col)
         candidate = None
-
         candidates = COLUMN_ALIASES.get(norm_target, [])
         search_keys = [norm_target, *candidates]
+
         for key in search_keys:
             if key in normalized_columns and normalized_columns[key]:
                 candidate = normalized_columns[key].pop(0)
@@ -373,6 +293,7 @@ def run() -> Path:
 
     df_ordenado = pd.concat(ordered_series, axis=1)
 
+    # 5. Preenchimento e Tratamento de Dados
     def preencher_se_vazio(destino: str, origem: str) -> None:
         if destino in df_ordenado.columns and origem in df_merged.columns:
             df_ordenado[destino] = df_ordenado[destino].mask(
@@ -400,22 +321,6 @@ def run() -> Path:
     ]
     total_economia_col = "Economia total 12 meses:"
 
-    def parse_currency_to_float(value: object) -> float:
-        text = to_clean_string(value).replace("R$", "").strip()
-        if not text:
-            return 0.0
-        normalized = text.replace(".", "").replace(",", ".").replace(" ", "")
-        try:
-            return float(normalized)
-        except ValueError:
-            digits = re.findall(r"-?\d+(?:[.,]\d+)?", text)
-            if digits:
-                try:
-                    return float(digits[0].replace(",", "."))
-                except ValueError:
-                    return 0.0
-        return 0.0
-
     if all(col in df_ordenado.columns for col in economia_cols):
         def calcular_total_economia(row: pd.Series) -> str:
             valores = [parse_currency_to_float(row[col]) for col in economia_cols]
@@ -423,15 +328,7 @@ def run() -> Path:
             if total == 0:
                 return ""
             return f"{total:.2f}"
-
         df_ordenado[total_economia_col] = df_ordenado.apply(calcular_total_economia, axis=1)
-
-    def format_currency_value(value: object) -> str:
-        text = to_clean_string(value)
-        if not text:
-            return ""
-        cleaned = text.replace("R$", "").strip()
-        return f"R$ {cleaned}" if cleaned else "R$"
 
     for col_currency in [
         "ALUGUEL REAJUSTADO - ATUAL / FUTURO (2023)",
@@ -450,13 +347,8 @@ def run() -> Path:
         for dest_letter in dest_letters if isinstance(dest_letters, (list, tuple)) else [dest_letters]:
             dest_col = FINAL_ORDER_BY_LETTER.get(dest_letter.upper())
             if not dest_col or dest_col not in df_ordenado.columns:
-                log.debug("Letra %s ou coluna destino %s indisponivel.", source_letter, dest_col)
                 continue
-            df_ordenado[dest_col] = (
-                df_merged[source_col]
-                .reindex(df_ordenado.index)
-                .fillna("")
-            )
+            df_ordenado[dest_col] = df_merged[source_col].reindex(df_ordenado.index).fillna("")
 
     if "dados locador (a)" in df_merged.columns:
         locador_info = df_merged["dados locador (a)"].apply(extrair_dados_locador)
@@ -481,11 +373,6 @@ def run() -> Path:
             lambda chave, onda: f"{chave}-{onda}" if chave and onda else chave,
         )
 
-    ontem = datetime.now() - timedelta(days=1)
-    pasta_destino = REPORT_DIR / ontem.strftime("%d-%m-%Y")
-    pasta_destino.mkdir(parents=True, exist_ok=True)
-    output_path = pasta_destino / f"Bradesco_{ontem.strftime('%d%m%Y')}_Report.xlsx"
-
     if "ENDERECO" not in df_ordenado.columns:
         df_ordenado["ENDERECO"] = ""
     if "ENDEREÇO CLIENTE" not in df_ordenado.columns:
@@ -501,19 +388,60 @@ def run() -> Path:
     df_ordenado["ENDERECO"] = base_endereco
     df_ordenado["ENDEREÇO CLIENTE"] = base_endereco
 
-    row_count = len(df_ordenado.index)
-    df_ordenado.to_excel(output_path, index=False)
-    log.info("Excel exportado em: %s", output_path)
+    # ==========================================
+    # 6. GERAÇÃO DO EXCEL E COLORAÇÃO EM MEMÓRIA
+    # ==========================================
+    
+    output = io.BytesIO()
+    
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_ordenado.to_excel(writer, index=False, sheet_name='Relatorio')
+        
+        # Acessando o workbook para aplicar a formatação visual
+        workbook = writer.book
+        worksheet = writer.sheets['Relatorio']
+        
+        cinza = PatternFill(start_color="c6c6c6", end_color="c6c6c6", fill_type="solid")
+        azul = PatternFill(start_color="00008b", end_color="00008b", fill_type="solid")
+        azul_claro = PatternFill(start_color="21abcd", end_color="21abcd", fill_type="solid")
+        preto = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
+        cinza_escuro = PatternFill(start_color="a0a0a0", end_color="a0a0a0", fill_type="solid")
 
-    try:
-        aplicar_coloracao(output_path)
-        log.info("Coloração aplicada com sucesso")
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Erro ao aplicar coloração: %s", exc)
+        faixas = [
+            (1, 12, cinza), (13, 22, preto), (23, 23, cinza), (24, 26, azul),
+            (27, 30, cinza), (31, 34, azul), (35, 36, cinza), (37, 38, azul),
+            (39, 49, cinza), (50, 52, azul), (53, 58, cinza), (59, 59, azul),
+            (60, 60, cinza), (61, 62, azul), (63, 64, cinza), (65, 67, azul),
+            (68, 68, cinza), (69, 69, azul), (70, 74, cinza), (75, 90, azul),
+            (91, 92, azul_claro), (93, 93, cinza_escuro), (94, 95, azul_claro), (96, 97, cinza_escuro),
+            (98, 98, azul), (99, 100, cinza), (101, 102, azul_claro), (103, 104, cinza_escuro),
+            (105, 106, azul_claro), (107, 107, cinza_escuro), (108, 108, azul),
+            (109, 110, cinza_escuro), (111, 112, azul_claro), (113, 113, cinza_escuro),
+            (114, 114, azul_claro), (115, 116, cinza_escuro), (117, 118, azul_claro),
+            (119, 119, cinza_escuro), (120, 121, azul_claro), (122, 122, cinza_escuro),
+            (123, 144, azul_claro)
+        ]
 
-    show_generation_popup([(output_path.name, row_count, str(output_path))], str(pasta_destino))
-    return output_path
+        for start, end, color in faixas:
+            for col in range(start, end + 1):
+                worksheet.cell(row=1, column=col).fill = color
 
+        for col in range(1, worksheet.max_column + 1):
+            cell = worksheet.cell(row=1, column=col)
+            if cell.value is not None and str(cell.value).strip():
+                cell.font = Font(color="FFFFFF", bold=True)
 
-if __name__ == "__main__":
-    run()
+        worksheet.freeze_panes = "M1"
+        worksheet.auto_filter.ref = worksheet.dimensions
+
+        thin = Side(style="thin", color="000000")
+        border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        for r in range(1, worksheet.max_row + 1):
+            for c in range(1, worksheet.max_column + 1):
+                worksheet.cell(row=r, column=c).border = border_all
+
+        worksheet.sheet_view.showGridLines = True
+
+    output.seek(0)
+    return output
