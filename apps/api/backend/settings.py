@@ -36,7 +36,7 @@ ALLOWED_HOSTS = [
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    "investcorp-monorepo-production.up.railway.app",
+    "https://investcorp-monorepo-production.up.railway.app",
     "https://investcorpsystem.lovable.app"
 ]
 
@@ -56,12 +56,14 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "corsheaders",
     "rest_framework",
     "api",
     "lastro.apps.LastroConfig",
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
