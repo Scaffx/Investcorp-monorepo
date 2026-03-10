@@ -1,54 +1,67 @@
 import os
-import tempfile
-import base64
+import io
+import pandas as pd # Certifique-se de ter pandas e xlsxwriter no requirements.txt
+from django.conf import settings
+from django.http import HttpResponse
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 
-# 1. Endpoint GET /api/health
+# 1. Endpoint GET /api/health (Mantido igual)
 @api_view(['GET'])
 def health_check(request):
-    """Retorna o status da API para o frontend saber que está online"""
     return Response({"status": "ok", "message": "API Django rodando perfeitamente no Railway!"})
 
-# 2. Endpoint POST /api/scrape
+# 2. Endpoint POST /api/scrape (Mantido igual)
 @api_view(['POST'])
 def run_scraper(request):
-    """Endpoint para acionar o seu script de scraping (vivareal.py)"""
-    # Aqui você pode pegar parâmetros enviados pelo frontend, ex:
-    # parametros = request.data
-    
-    # TODO: Importar e rodar a função principal do seu vivareal.py aqui
-    # ex: from scripts.vivareal import iniciar_scraping
-    # iniciar_scraping()
+    return Response({"status": "success", "message": "Scraping iniciado/concluído com sucesso!"})
 
-    return Response({
-        "status": "success", 
-        "message": "Scraping iniciado/concluído com sucesso!"
-    })
-
-# 3. Endpoint POST /api/excel
+# 3. NOVO Endpoint POST /api/excel (Conectado com o Lovable)
 @api_view(['POST'])
+@parser_classes([MultiPartParser, FormParser]) # CRÍTICO: Permite receber arquivos (FormData)
 def get_excel(request):
-    """Lê o arquivo Excel, converte para Base64 e envia para o frontend baixar"""
-    
-    # Caminho do arquivo Excel (ajuste o nome conforme o arquivo gerado pelo seu script)
-    # Pela imagem anterior, vi que você tem um 'resultado.xlsx' na raiz do apps/api
-    file_path = os.path.join(settings.BASE_DIR, 'resultado.xlsx')
+    """Recebe a planilha do frontend, processa e devolve o Excel gerado"""
     
     try:
-        # Abre o arquivo em modo leitura binária (rb)
-        with open(file_path, "rb") as excel_file:
-            # Converte para base64 e depois decodifica para string (exigência do JSON)
-            encoded_string = base64.b64encode(excel_file.read()).decode('utf-8')
-            
-        return Response({
-            "file_base64": encoded_string,
-            "filename": "resultado_vivareal.xlsx"
-        })
+        # 1. Capturar os parâmetros de texto enviados pelo frontend Lovable
+        tipo_relatorio = request.data.get('tipo_relatorio', 'Padrao')
+        nseq = request.data.get('nseq', '')
         
-    except FileNotFoundError:
-        return Response(
-            {"error": "Arquivo Excel ainda não foi gerado ou não foi encontrado."}, 
-            status=404
+        # 2. Capturar os arquivos enviados
+        arquivo_base = request.FILES.get('arquivo_base')
+        # arquivo_modelo = request.FILES.get('arquivo_modelo') # Se for usar o modelo opcional
+        
+        if not arquivo_base:
+            return Response({"error": "Nenhuma planilha base foi enviada."}, status=400)
+
+        # 3. Lógica de Analista de Dados: Ler o arquivo recebido em memória com Pandas
+        # Como arquivo_base é um objeto em memória (InMemoryUploadedFile), o Pandas lê direto
+        df = pd.read_excel(arquivo_base)
+        
+        # ---> AQUI VOCÊ APLICA SUAS REGRAS DE NEGÓCIO <---
+        # Exemplo: Se o usuário digitou NSEQs, vamos filtrar o DataFrame
+        if nseq:
+            # Transforma a string "12345, 12332" em uma lista ['12345', '12332']
+            lista_nseq = [n.strip() for n in nseq.split(',')]
+            # Supondo que sua planilha tenha uma coluna chamada 'NSEQ'
+            # df = df[df['NSEQ'].astype(str).isin(lista_nseq)] 
+        
+        # 4. Salvar o DataFrame processado em um buffer de memória (não salva no HD do Railway)
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df.to_excel(writer, index=False, sheet_name='Relatorio_Gerado')
+        
+        output.seek(0) # Volta o ponteiro para o início do arquivo
+
+        # 5. Retornar o arquivo diretamente como binário (Blob) para forçar o download no navegador
+        response = HttpResponse(
+            output.getvalue(),
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
+        response['Content-Disposition'] = f'attachment; filename="Relatorio_{tipo_relatorio}.xlsx"'
+        
+        return response
+
+    except Exception as e:
+        return Response({"error": f"Erro ao processar planilha: {str(e)}"}, status=500)
