@@ -7,13 +7,13 @@ import sys
 import re
 import unicodedata
 import pandas as pd
+import io
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
 # ====== CONFIGURAÇÕES DE CAMINHOS PARA SERVIDOR ======
 BASE_DIR = Path(__file__).resolve().parent.parent
-REPORT_DIR = BASE_DIR / "reports_gerados"
 MODELOS_DIR = BASE_DIR / "modelos"
 
 REFERENCE_SHEET_NAME = "CLARO - DISTRATO"
@@ -118,18 +118,21 @@ def copy_from_siim(source_df: pd.DataFrame, dest_df: pd.DataFrame, target: str, 
         series = series.map(transform)
     dest_df[target] = series
 
-def apply_excel_formatting(path: Path, sheet_name: str) -> None:
-    wb = load_workbook(path)
+def apply_excel_formatting_buffer(buffer: io.BytesIO, sheet_name: str) -> io.BytesIO:
+    buffer.seek(0)
+    wb = load_workbook(buffer)
+    
     if sheet_name not in wb.sheetnames:
-        wb.save(path)
-        return
+        return buffer
+        
     ws = wb[sheet_name]
-    if ws.max_row &lt; 1 or ws.max_column &lt; 1:
-        wb.save(path)
-        return
+    if ws.max_row < 1 or ws.max_column < 1:
+        return buffer
+
     ws.freeze_panes = "D2"
     ws.auto_filter.ref = ws.dimensions
     ws.row_dimensions[1].height = 26
+
     header_font = Font(color="FFFFFF", bold=True)
     red_fill = PatternFill(fill_type="solid", fgColor="FF033E")
     navy_fill = PatternFill(fill_type="solid", fgColor="00008B")
@@ -138,12 +141,13 @@ def apply_excel_formatting(path: Path, sheet_name: str) -> None:
 
     for cell in ws[1]:
         col_idx = cell.column
-        if 34 &lt;= col_idx &lt;= 38:
+        if 34 <= col_idx <= 38:
             cell.fill = navy_fill
         elif col_idx == 39:
             cell.fill = red_fill
         else:
             cell.fill = red_fill
+            
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.border = border
@@ -167,52 +171,42 @@ def apply_excel_formatting(path: Path, sheet_name: str) -> None:
                     max_length = len(part)
         width = min(max(max_length + 2, 12), 60)
         ws.column_dimensions[get_column_letter(col_idx)].width = width
-    wb.save(path)
+
+    new_buffer = io.BytesIO()
+    wb.save(new_buffer)
+    new_buffer.seek(0)
+    return new_buffer
 
 # ====== NÚCLEO ADAPTADO PARA API ======
-def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path: str | Path | None = None) -> Path:
+def processar_relatorio_claro_distrato(arquivo_excel_em_memoria, nseq_string: str, arquivo_modelo_em_memoria=None) -> io.BytesIO:
     """
-    Função principal adaptada para receber dados da API.
+    Função principal adaptada para receber dados da API em memória.
     """
+    # 1. Tratar a string de NSEQs
+    nseq_list = [n.strip() for n in nseq_string.split(',') if n.strip()]
     if not nseq_list:
         raise ValueError("Nenhum NSEQ fornecido para processamento.")
 
     rules = [normalize_nseq(n) for n in nseq_list if normalize_nseq(n)]
     order_map = {value: idx for idx, value in enumerate(rules)}
 
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    agora = datetime.now()
-    out_path = REPORT_DIR / f"CLARO_DISTRATO_{agora.strftime('%d%m%Y_%H%M%S')}.xlsx"
-
-    # Carrega SIIM
-    path_obj = Path(negociacao_file_path)
-    if not path_obj.exists():
-        raise FileNotFoundError(f"Arquivo de entrada não encontrado: {path_obj}")
-
-    if path_obj.suffix.lower() in (".xlsx", ".xls"):
-        siim_df = pd.read_excel(path_obj)
-    else:
-        siim_df = pd.read_csv(path_obj, sep=";", encoding="utf-8", engine="python")
-        if siim_df.shape[1] == 1:
-            siim_df = pd.read_csv(path_obj, sep=",", encoding="utf-8", engine="python")
-
+    # 2. Carregar SIIM (Planilha de Renegociação enviada)
+    siim_df = pd.read_excel(arquivo_excel_em_memoria)
     siim_df.columns = [str(c).strip() for c in siim_df.columns]
 
     nseq_column = find_column(siim_df, "NSEQ")
     if not nseq_column:
-        raise KeyError("Coluna 'NSEQ' não encontrada em RelNegociacao.xlsx")
+        raise KeyError("Coluna 'NSEQ' não encontrada na planilha enviada.")
 
     siim_df["__nseq_norm"] = siim_df[nseq_column].map(normalize_nseq)
     siim_df["NSEQ - Siim"] = siim_df["__nseq_norm"].map(format_nseq_display)
 
     filtered = siim_df[siim_df["__nseq_norm"].isin(order_map)].copy()
-
     if filtered.empty:
-        raise ValueError("Nenhuma linha do RelNegociacao.xlsx corresponde aos NSEQ informados.")
+        raise ValueError("Nenhuma linha da planilha corresponde aos NSEQs informados.")
 
     filtered["__order"] = filtered["__nseq_norm"].map(order_map)
     filtered = filtered.sort_values("__order").reset_index(drop=True)
-
     filtered["NSEQ - Siim"] = filtered["__nseq_norm"].map(format_nseq_display)
 
     rep = pd.DataFrame(index=filtered.index)
@@ -223,17 +217,18 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
 
     rep["NSEQ - Siim"] = filtered["NSEQ - Siim"]
 
-    # Lógica de definição do modelo
-    if modelo_file_path and Path(modelo_file_path).exists():
-        reference_path = Path(modelo_file_path)
+    # 3. Lógica de definição do modelo
+    if arquivo_modelo_em_memoria:
+        arquivo_modelo_em_memoria.seek(0)
+        reference_file = arquivo_modelo_em_memoria
     else:
-        reference_path = MODELOS_DIR / "CLARO_DISTRATO-Report-Invest.xlsx"
+        reference_file = MODELOS_DIR / "CLARO_DISTRATO-Report-Invest.xlsx"
+        if not reference_file.exists():
+            raise FileNotFoundError("Arquivo de referência não foi enviado e não existe no servidor.")
 
-    if not reference_path.exists():
-        raise FileNotFoundError("Arquivo de referência não foi enviado e não existe no servidor.")
-
+    # 4. Carregar Modelo
     reference_df = pd.read_excel(
-        reference_path,
+        reference_file,
         sheet_name=REFERENCE_SHEET_NAME,
         header=REFERENCE_HEADER_ROW,
     )
@@ -249,6 +244,7 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
 
     priority_columns = set(REFERENCE_PRIORITY_COLUMNS)
 
+    # 5. Mesclar Dados
     for column in reference_df.columns:
         if column == "__nseq_norm" or column not in HEADERS_DISTRATO:
             continue
@@ -278,9 +274,11 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
 
     rep = rep[HEADERS_DISTRATO]
 
-    with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+    # 6. Salvar e Formatar em Memória
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
         rep.to_excel(writer, sheet_name=SHEET_NAME, index=False)
 
-    apply_excel_formatting(out_path, SHEET_NAME)
+    output_formatado = apply_excel_formatting_buffer(output, SHEET_NAME)
 
-    return out_path
+    return output_formatado
