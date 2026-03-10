@@ -75,6 +75,5 @@ urlpatterns = [
 
     path("health", views.health_check, name="health_check"),
     #path("scrape", views.run_scraper, name="run_scraper"),
-    path("excel", views.get_excel, name="get_excel"),
-    
+    path('excel', views.get_excel, name='get_excel'), 
 ]
