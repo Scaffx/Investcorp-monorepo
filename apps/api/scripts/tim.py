@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 
 from __future__ import annotations
+
+import io
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Iterable, Union, Sequence
@@ -12,21 +14,31 @@ from openpyxl.styles import Alignment, Border, Side
 
 # ====== CONFIGURAÇÕES DE CAMINHOS PARA SERVIDOR ======
 BASE_DIR = Path(__file__).resolve().parent.parent
-REPORT_DIR = BASE_DIR / "reports_gerados"
 MODELOS_DIR = BASE_DIR / "modelos"
 
 OUTPUT_PREFIX = "TIM"
+
 DEFAULT_STATUS_COL = "DQ"
 DEFAULT_X_COL = "X"
 DEFAULT_EB_COL = "EB"
 
-ALWAYS_INCLUDE_CONTRACTS = {"3002893", "3005931", "3006864"}
+# REGRA 4: Removido o contrato 3006864 desta lista
+ALWAYS_INCLUDE_CONTRACTS = {"3002893", "3005931"}
+# Contratos que DEVEM ser ignorados, mesmo que venham no SIIM
+FORBIDDEN_CONTRACTS = {"3006864"}
 
 HISTORY_HEADER_CANDIDATES = ("ULTIMO HISTORICO", "ÚLTIMO HISTORICO", "ULTIMO HISTÓRICO", "ULTIMO HIST", "ULTIMO HISTORICO ", "EC", "EC (ULTIMO HISTORICO)", "EC ULTIMO HISTORICO")
 NSEQ_HEADER_CANDIDATES = ("NSEQ", "NSEQ SIIM", "NSEQ_SIIM", "NSEQ SIIM - TIM", "NSEQ ESCOLHIDO")
 ONDA_HEADER_CANDIDATES = ("ONDA",)
 CONTRACT_HEADER_CANDIDATES = ("CONTRATO", "CONTRATO SAP", "ORDEM SAP", "ORDEM_SAP", "ORDEM SAP (OC)")
+
+# Novas colunas para buscar no SIIM (Regras 1 e 2)
+INICIO_CONTRATO_CANDIDATES = ("INICIO CONTRATO", "DATA INICIO", "DATA_INICIO")
+FIM_CONTRATO_CANDIDATES = ("TERMINO CONTRATO", "DATA FIM", "DATA_FIM")
+
 MODEL_SHEET_FALLBACKS = ("INVESTCORP", "BASE", "Planilha1", "Dados", "TIM")
+
+# ====== FUNÇÕES AUXILIARES ======
 
 def _find_header_row(ws) -> int:
     for row in ws.iter_rows(min_row=1, max_row=ws.max_row):
@@ -106,24 +118,54 @@ def _normalize_onda_value(value: object) -> int:
     try: return int(float(str(value).strip()))
     except Exception: return 0
 
-def _resolve_sheet_name(sheet: Optional[Union[str, int]], workbook_path: Optional[Path] = None, fallback_names: Sequence[str] = ()) -> Union[str, int]:
+def _resolve_sheet_name(sheet: Optional[Union[str, int]], workbook_file, fallback_names: Sequence[str] = ()) -> Union[str, int]:
     if sheet is None: desired = None
     elif isinstance(sheet, str): desired = sheet.strip()
     else: desired = sheet
     if desired not in (None, ""): return desired
-    if workbook_path is not None and fallback_names:
+    
+    if workbook_file is not None and fallback_names:
         try:
-            xls = pd.ExcelFile(workbook_path)
+            if hasattr(workbook_file, 'seek'):
+                workbook_file.seek(0)
+            xls = pd.ExcelFile(workbook_file)
             for candidate in fallback_names:
                 if candidate in xls.sheet_names: return candidate
         except Exception: pass
     return 0
 
-def _build_tim_dataframe(modelo_path: Path, relneg_path: Path, allowed_nseqs: Iterable[str]) -> pd.DataFrame:
+# REGRA 1 e 2: Formatação de Data DD/MM/AA
+def format_date_ddmmaa(value: object) -> str:
+    if pd.isna(value) or value is None or str(value).strip() == "":
+        return ""
+    try:
+        # Tenta converter para datetime
+        dt = pd.to_datetime(value, errors='coerce')
+        if pd.isna(dt):
+            return str(value)
+        # Formata como DD/MM/AA
+        return dt.strftime("%d/%m/%y")
+    except Exception:
+        return str(value)
+
+# REGRA 3: Limpar "TIM - " do Status
+def clean_tim_status(value: object) -> str:
+    if pd.isna(value) or value is None:
+        return ""
+    text = str(value).strip()
+    # Remove o prefixo "TIM - " (case insensitive)
+    return re.sub(r'(?i)^TIM\s*-\s*', '', text)
+
+# ====== CONSTRUÇÃO DO DATAFRAME ======
+
+def _build_tim_dataframe(modelo_file, relneg_file, allowed_nseqs: Iterable[str]) -> pd.DataFrame:
     allowed_nseqs_norm = {_normalize_nseq_value(item) for item in allowed_nseqs if _normalize_nseq_value(item)}
     
-    modelo_sheet_name = _resolve_sheet_name(None, workbook_path=modelo_path, fallback_names=MODEL_SHEET_FALLBACKS)
-    modelo = pd.read_excel(modelo_path, sheet_name=modelo_sheet_name, header=None, dtype=object)
+    modelo_sheet_name = _resolve_sheet_name(None, workbook_file=modelo_file, fallback_names=MODEL_SHEET_FALLBACKS)
+    
+    if hasattr(modelo_file, 'seek'):
+        modelo_file.seek(0)
+    modelo = pd.read_excel(modelo_file, sheet_name=modelo_sheet_name, header=None, dtype=object)
     
     needed_cols_modelo = max(excel_col_to_idx("U"), excel_col_to_idx("W"), excel_col_to_idx(DEFAULT_X_COL))
     modelo = ensure_width(modelo, needed_cols_modelo)
@@ -135,7 +177,10 @@ def _build_tim_dataframe(modelo_path: Path, relneg_path: Path, allowed_nseqs: It
     
     w_series = modelo.iloc[:, excel_col_to_idx("W") - 1]
     
-    rel = pd.read_excel(relneg_path, header=None, dtype=object)
+    if hasattr(relneg_file, 'seek'):
+        relneg_file.seek(0)
+    rel = pd.read_excel(relneg_file, header=None, dtype=object)
+    
     needed_cols_rel = max(excel_col_to_idx(DEFAULT_EB_COL), excel_col_to_idx(DEFAULT_STATUS_COL))
     rel = ensure_width(rel, needed_cols_rel)
     
@@ -146,6 +191,9 @@ def _build_tim_dataframe(modelo_path: Path, relneg_path: Path, allowed_nseqs: It
     if contract_idx is None: raise ValueError("Coluna de contrato não encontrada no RelNegociacao.")
     
     history_idx = _find_column_index_by_label(rel, HISTORY_HEADER_CANDIDATES)
+    inicio_idx = _find_column_index_by_label(rel, INICIO_CONTRATO_CANDIDATES)
+    fim_idx = _find_column_index_by_label(rel, FIM_CONTRATO_CANDIDATES)
+    
     eb_idx = excel_col_to_idx(DEFAULT_EB_COL) - 1
     dq_idx = excel_col_to_idx(DEFAULT_STATUS_COL) - 1
     
@@ -155,9 +203,16 @@ def _build_tim_dataframe(modelo_path: Path, relneg_path: Path, allowed_nseqs: It
         "DQ": rel.iloc[:, dq_idx],
         "CONTRATO_norm": rel.iloc[:, contract_idx].apply(lambda v: "" if pd.isna(v) else str(v).strip()),
     })
+    
     rel_df = rel_df.loc[rel_df["CONTRATO_norm"] != ""].copy()
     
+    # REGRA 4: Remover explicitamente o contrato proibido
+    rel_df = rel_df.loc[~rel_df["CONTRATO_norm"].isin(FORBIDDEN_CONTRACTS)].copy()
+    
     rel_df["HISTORY_raw"] = rel.iloc[:, history_idx] if history_idx is not None else pd.NA
+    rel_df["INICIO_raw"] = rel.iloc[:, inicio_idx] if inicio_idx is not None else pd.NA
+    rel_df["FIM_raw"] = rel.iloc[:, fim_idx] if fim_idx is not None else pd.NA
+    
     rel_df["NSEQ_norm"] = rel.iloc[:, nseq_idx].apply(_normalize_nseq_value)
     
     if allowed_nseqs_norm:
@@ -167,11 +222,20 @@ def _build_tim_dataframe(modelo_path: Path, relneg_path: Path, allowed_nseqs: It
     rel_df["ONDA_val"] = rel.iloc[:, onda_idx].apply(_normalize_onda_value) if onda_idx is not None else 0
     
     rel_df = rel_df.sort_values(by=["NSEQ_norm", "ONDA_val"], ascending=[True, False]).drop_duplicates(subset=["NSEQ_norm"], keep="first")
-    rel_df["V_status_tail"] = rel_df["DQ"].apply(tail_after_last_hyphen)
+    
+    # REGRA 3: Aplicar limpeza do status "TIM - "
+    rel_df["V_status_tail"] = rel_df["DQ"].apply(clean_tim_status)
+    
+    # REGRA 1 e 2: Formatar datas
+    rel_df["INICIO_fmt"] = rel_df["INICIO_raw"].apply(format_date_ddmmaa)
+    rel_df["FIM_fmt"] = rel_df["FIM_raw"].apply(format_date_ddmmaa)
     
     contract_status_map = rel_df.dropna(subset=["CONTRATO_norm"]).drop_duplicates(subset=["CONTRATO_norm"], keep="first").set_index("CONTRATO_norm")["V_status_tail"].to_dict()
     contract_to_eb_raw = rel_df.dropna(subset=["CONTRATO_norm"]).drop_duplicates(subset=["CONTRATO_norm"], keep="first").set_index("CONTRATO_norm")["EB_raw"].to_dict()
     contract_history_map = rel_df.dropna(subset=["CONTRATO_norm"]).drop_duplicates(subset=["CONTRATO_norm"], keep="first").set_index("CONTRATO_norm")["HISTORY_raw"].to_dict() if "HISTORY_raw" in rel_df.columns else {}
+    
+    contract_inicio_map = rel_df.dropna(subset=["CONTRATO_norm"]).drop_duplicates(subset=["CONTRATO_norm"], keep="first").set_index("CONTRATO_norm")["INICIO_fmt"].to_dict()
+    contract_fim_map = rel_df.dropna(subset=["CONTRATO_norm"]).drop_duplicates(subset=["CONTRATO_norm"], keep="first").set_index("CONTRATO_norm")["FIM_fmt"].to_dict()
     
     allowed_contracts = set(contract_status_map.keys())
     contract_series = modelo.iloc[:, model_contract_idx].apply(lambda v: "" if pd.isna(v) else str(v).strip())
@@ -186,6 +250,19 @@ def _build_tim_dataframe(modelo_path: Path, relneg_path: Path, allowed_nseqs: It
         
     rows_a_to_u, v_values, history_values, eb_values = [], [], [], []
     
+    # Encontrar as colunas de Vigência no modelo para substituí-las
+    header_row_idx = _find_header_row(modelo) - 1 # 0-indexed
+    headers = [str(col).strip().upper() for col in modelo.iloc[header_row_idx]]
+    
+    inicio_col_idx = -1
+    fim_col_idx = -1
+    
+    for idx, h in enumerate(headers):
+        if "VIGÊNCIA ATUALIZADA INÍCIO" in h or "VIGENCIA ATUALIZADA INICIO" in h:
+            inicio_col_idx = idx
+        elif "VIGÊNCIA ATUALIZADA FIM" in h or "VIGENCIA ATUALIZADA FIM" in h:
+            fim_col_idx = idx
+    
     for contract in ordered_contracts:
         idx_in_model = contract_to_index.get(contract)
         if idx_in_model is not None:
@@ -196,8 +273,16 @@ def _build_tim_dataframe(modelo_path: Path, relneg_path: Path, allowed_nseqs: It
             row_series.iloc[model_contract_idx] = contract
             fallback_history = pd.NA
             
+        # Aplica as datas formatadas (Regras 1 e 2)
+        if inicio_col_idx != -1 and inicio_col_idx < len(row_series):
+            row_series.iloc[inicio_col_idx] = contract_inicio_map.get(contract, row_series.iloc[inicio_col_idx])
+            
+        if fim_col_idx != -1 and fim_col_idx < len(row_series):
+            row_series.iloc[fim_col_idx] = contract_fim_map.get(contract, row_series.iloc[fim_col_idx])
+            
         rows_a_to_u.append(row_series)
         v_values.append(contract_status_map.get(contract, ""))
+        
         history_value = contract_history_map.get(contract, fallback_history)
         history_values.append(fallback_history if pd.isna(history_value) else history_value)
         eb_values.append(contract_to_eb_raw.get(contract, ""))
@@ -214,67 +299,78 @@ def _build_tim_dataframe(modelo_path: Path, relneg_path: Path, allowed_nseqs: It
             idx, remainder = divmod(idx - 1, 26)
             letters = chr(65 + remainder) + letters
         return letters
+    
     out.columns = [idx_to_excel(i) for i in range(1, out.shape[1] + 1)]
     return out
 
 # ====== NÚCLEO ADAPTADO PARA API ======
-def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path: str | Path | None = None) -> Path:
-    if not nseq_list:
-        raise ValueError("Nenhum NSEQ fornecido para processamento.")
 
-    if modelo_file_path and Path(modelo_file_path).exists():
-        modelo_file = Path(modelo_file_path)
+def processar_relatorio_tim(arquivo_excel_em_memoria, nseq_string: str, arquivo_modelo_em_memoria=None) -> io.BytesIO:
+    """
+    Função principal adaptada para receber dados da API em memória.
+    """
+    if not nseq_string:
+        raise ValueError("Nenhum NSEQ fornecido para processamento.")
+        
+    nseq_list = [n.strip() for n in nseq_string.split(',') if n.strip()]
+
+    # Lógica do Modelo
+    if arquivo_modelo_em_memoria:
+        modelo_file = arquivo_modelo_em_memoria
     else:
-        candidates = sorted(MODELOS_DIR.glob(MODEL_GLOB_PATTERN))
+        # Busca no servidor
+        candidates = sorted(MODELOS_DIR.glob("TIM*.xlsx"))
         modelo_file = candidates[0] if candidates else MODELOS_DIR / "TIM_Modelo.xlsx"
         if not modelo_file.exists():
-            raise FileNotFoundError("Planilha de modelo TIM não encontrada.")
+            raise FileNotFoundError("Planilha de modelo TIM não encontrada no servidor.")
 
-    input_path = Path(negociacao_file_path)
-    if not input_path.exists():
-        raise FileNotFoundError("Arquivo de RelNegociacao não encontrado.")
-
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    agora = datetime.now()
-    out_path = REPORT_DIR / f"{OUTPUT_PREFIX}_{agora.strftime('%d%m%Y_%H%M%S')}.xlsx"
-
-    df_out = _build_tim_dataframe(modelo_file, input_path, nseq_list)
-
-    modelo_sheet_name = _resolve_sheet_name(None, workbook_path=modelo_file, fallback_names=MODEL_SHEET_FALLBACKS)
+    # Processa o DataFrame
+    df_out = _build_tim_dataframe(modelo_file, arquivo_excel_em_memoria, nseq_list)
+    
+    # Volta o ponteiro do modelo para carregar o openpyxl
+    if hasattr(modelo_file, 'seek'):
+        modelo_file.seek(0)
+    
+    modelo_sheet_name = _resolve_sheet_name(None, workbook_file=modelo_file, fallback_names=MODEL_SHEET_FALLBACKS)
     wb = load_workbook(modelo_file)
     ws = wb[modelo_sheet_name]
     
     header_row = _find_header_row(ws)
     data_start_row = header_row + 1
+    
     if ws.max_row >= data_start_row:
         ws.delete_rows(data_start_row, ws.max_row - data_start_row + 1)
-
+        
     for row_offset, row_values in enumerate(df_out.itertuples(index=False, name=None)):
         target_row = data_start_row + row_offset
         for col_offset, value in enumerate(row_values, start=1):
             ws.cell(row=target_row, column=col_offset, value=None if pd.isna(value) else value)
-
-    ws.cell(row=2, column=2, value=datetime.now().strftime("%d/%m/%Y %H:%M"))
-
+            
     total_rows = len(df_out)
+    
+    # REGRA 5: Ajustar colunas B e Q para conter a QTD de contratos
+    # Coluna B = 2, Coluna Q = 17
+    ws.cell(row=2, column=2, value=total_rows)   # Coluna B (Quantidade)
+    ws.cell(row=2, column=17, value=total_rows)  # Coluna Q (Quantidade)
+    
     total_cols = df_out.shape[1] if df_out.shape[1] else ws.max_column
     last_row_for_border = data_start_row + total_rows - 1 if total_rows else header_row
     
     center_alignment = Alignment(horizontal="center", vertical="center")
     border_thin = Border(left=Side(style="thin", color="000000"), right=Side(style="thin", color="000000"), top=Side(style="thin", color="000000"), bottom=Side(style="thin", color="000000"))
-
+    
     for col_idx in (1, 4):
         if col_idx <= ws.max_column:
             for row in range(header_row, last_row_for_border + 1):
                 ws.cell(row=row, column=col_idx).alignment = center_alignment
-
+                
     for row in range(header_row, last_row_for_border + 1):
         for col_idx in range(1, total_cols + 1):
             ws.cell(row=row, column=col_idx).border = border_thin
-
+            
     header_map = {str(ws.cell(header_row, c).value).strip().upper(): c for c in range(1, ws.max_column + 1) if ws.cell(header_row, c).value}
     data_rows = list(range(data_start_row, data_start_row + total_rows))
-
+    
     if "resumo" in wb.sheetnames:
         ws_resumo = wb["resumo"]
         resumo_headers = [r for r in range(1, ws_resumo.max_row + 1) if _normalize_label(ws_resumo.cell(r, 1).value).upper() == "RÓTULOS DE LINHA"]
@@ -288,5 +384,9 @@ def run(nseq_list: list[str], negociacao_file_path: str | Path, modelo_file_path
                 counts_tipo = _build_counts(pd.Series([ws.cell(row=r, column=col_tipo).value for r in data_rows]))
                 _apply_counts_to_table(ws_resumo, resumo_headers[1], counts_tipo, total_rows)
 
-    wb.save(out_path)
-    return out_path
+    # Salva na memória RAM
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    
+    return output
