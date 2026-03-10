@@ -1,80 +1,93 @@
 import os
-import io
-import pandas as pd
-from django.conf import settings
 from django.http import HttpResponse
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 
-# ... (Mantenha seus endpoints health_check e run_scraper aqui) ...
+# 1. Importando os seus scripts (descomente conforme for criando os arquivos .py)
+from .relatorio_bradesco import processar_relatorio_bradesco
+# from .relatorio_casas_bahia import processar_relatorio_casas_bahia
+# from .relatorio_tim import processar_relatorio_tim
+# from .relatorio_claro_distrato import processar_relatorio_claro_distrato
+# from .relatorio_claro_renovacao import processar_relatorio_claro_renovacao
+# from .relatorio_diversos import processar_relatorio_diversos
+
+@api_view(['GET'])
+def health_check(request):
+    return Response({"status": "ok", "message": "API Django rodando!"})
 
 @api_view(['POST'])
 @parser_classes([MultiPartParser, FormParser])
 def get_excel(request):
-    """Recebe a planilha do frontend (via Edge Function), processa e devolve o Excel gerado"""
+    """Recebe a planilha do frontend, roteia para o script correto e devolve o Excel"""
     
     try:
-        # 1. Capturar os parâmetros com os nomes EXATOS que o Lovable está enviando
-        report_type = request.data.get('report_type', 'Padrao')
+        # Captura os dados enviados pelo Lovable e padroniza para minúsculo
+        report_type = request.data.get('report_type', '').strip().lower()
         nseq = request.data.get('nseq', '')
-        
-        # 2. Capturar os arquivos com os nomes EXATOS
         planilha_renegociacao = request.FILES.get('planilha_renegociacao')
-        modelo = request.FILES.get('modelo') # Opcional
         
+        # Validações iniciais
         if not planilha_renegociacao:
             return Response({"error": "A planilha de renegociação não foi enviada."}, status=400)
+        if not nseq:
+            return Response({"error": "Nenhum NSEQ foi informado."}, status=400)
+        if not report_type:
+            return Response({"error": "Tipo de relatório não informado."}, status=400)
 
-        # 3. Lógica de Analista de Dados: Ler o arquivo recebido em memória com Pandas
-        df = pd.read_excel(planilha_renegociacao)
-        
-        # --- DEBUG PARA O RAILWAY ---
-        # Esses prints vão aparecer na aba "Deploy Logs" do Railway. 
-        # É a melhor forma de você ver o que o Lovable enviou.
-        print(f"--- DEBUG RELATÓRIO ---")
-        print(f"Tipo recebido: {report_type}")
-        print(f"NSEQ recebido: {nseq}")
-        print(f"Colunas do Excel: {df.columns.tolist()}")
-        
-        # ---> APLICAÇÃO DA REGRA DE NEGÓCIO (FILTRO NSEQ) <---
-        if nseq:
-            # 1. Transforma a string recebida (ex: "2594, 1234") em uma lista limpa de strings ['2594', '1234']
-            lista_nseq = [str(n).strip() for n in nseq.split(',') if str(n).strip()]
+        # ==========================================
+        # ROTEAMENTO (O Maestro)
+        # ==========================================
+        arquivo_processado = None
+        nome_arquivo_saida = "Relatorio_Gerado.xlsx"
+
+        if report_type == 'bradesco':
+            arquivo_processado = processar_relatorio_bradesco(planilha_renegociacao, nseq)
+            nome_arquivo_saida = "Bradesco_Report.xlsx"
             
-            # 2. Verifica se a coluna 'NSEQ' realmente existe no Excel (Case sensitive)
-            # Ajuste 'NSEQ' para o nome exato do cabeçalho da sua planilha, se for diferente
-            coluna_chave = 'NSEQ' 
+        elif report_type == 'casas bahia':
+            # arquivo_processado = processar_relatorio_casas_bahia(planilha_renegociacao, nseq)
+            nome_arquivo_saida = "CasasBahia_Report.xlsx"
+            return Response({"error": "Script da Casas Bahia em desenvolvimento."}, status=501)
             
-            if coluna_chave in df.columns:
-                # 3. O SEGREDO: Converte a coluna do Excel para String e remove espaços em branco
-                # Isso garante que "2594 " (Excel) dê match com "2594" (Frontend)
-                df[coluna_chave] = df[coluna_chave].astype(str).str.strip()
-                
-                # 4. Aplica o filtro: Traz apenas as linhas onde o NSEQ está na lista digitada
-                df = df[df[coluna_chave].isin(lista_nseq)]
-                
-                print(f"Linhas após o filtro: {len(df)}")
-                
-                # Opcional: Se o filtro zerar a base, você pode avisar o usuário
-                if df.empty:
-                    return Response({"error": f"Nenhum dado encontrado para os NSEQs: {nseq}"}, status=404)
-            else:
-                return Response({"error": f"A coluna '{coluna_chave}' não foi encontrada na planilha anexada."}, status=400)
-        
-        # 4. Salvar o DataFrame processado em um buffer de memória usando openpyxl
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Relatorio_Gerado')
+        elif report_type == 'tim':
+            # arquivo_processado = processar_relatorio_tim(planilha_renegociacao, nseq)
+            nome_arquivo_saida = "TIM_Report.xlsx"
+            return Response({"error": "Script da TIM em desenvolvimento."}, status=501)
+            
+        elif report_type == 'claro distrato':
+            # arquivo_processado = processar_relatorio_claro_distrato(planilha_renegociacao, nseq)
+            nome_arquivo_saida = "ClaroDistrato_Report.xlsx"
+            return Response({"error": "Script Claro Distrato em desenvolvimento."}, status=501)
+            
+        # Aceita com ou sem acento para evitar bugs de digitação no frontend
+        elif report_type in ['claro renovacao', 'claro renovação']:
+            # arquivo_processado = processar_relatorio_claro_renovacao(planilha_renegociacao, nseq)
+            nome_arquivo_saida = "ClaroRenovacao_Report.xlsx"
+            return Response({"error": "Script Claro Renovação em desenvolvimento."}, status=501)
+            
+        elif report_type == 'diversos':
+            # arquivo_processado = processar_relatorio_diversos(planilha_renegociacao, nseq)
+            nome_arquivo_saida = "Diversos_Report.xlsx"
+            return Response({"error": "Script Diversos em desenvolvimento."}, status=501)
+            
+        else:
+            return Response({"error": f"O tipo de relatório '{report_type}' é inválido ou não existe."}, status=400)
 
-        # 5. Retornar o arquivo diretamente como binário (Blob)
-        response = HttpResponse(
-            output.getvalue(),
-            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-        response['Content-Disposition'] = f'attachment; filename="Relatorio_{report_type}.xlsx"'
-        
-        return response
+        # ==========================================
+        # RETORNO UNIFICADO
+        # ==========================================
+        if arquivo_processado:
+            response = HttpResponse(
+                arquivo_processado.getvalue(),
+                content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
+            response['Content-Disposition'] = f'attachment; filename="{nome_arquivo_saida}"'
+            return response
 
+    except ValueError as ve:
+        # Captura erros de regra de negócio (ex: "NSEQ não encontrado na base")
+        return Response({"error": str(ve)}, status=400)
     except Exception as e:
-        return Response({"error": f"Erro ao processar planilha: {str(e)}"}, status=500)
+        # Captura erros críticos do Python/Pandas
+        return Response({"error": f"Erro interno no servidor: {str(e)}"}, status=500)
