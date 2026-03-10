@@ -49,11 +49,13 @@ def get_excel(request):
         
         # 4. Salvar o DataFrame processado em um buffer de memória (não salva no HD do Railway)
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        
+         # Mude o engine para 'openpyxl' (que já está no seu requirements.txt)
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Relatorio_Gerado')
         
         output.seek(0) # Volta o ponteiro para o início do arquivo
-
+        
         # 5. Retornar o arquivo diretamente como binário (Blob) para forçar o download no navegador
         response = HttpResponse(
             output.getvalue(),
