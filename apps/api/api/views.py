@@ -52,30 +52,26 @@ def get_excel(request):
             nome_arquivo_saida = "Bradesco_Report.xlsx"
             
         elif report_type == 'casas bahia':
-            # arquivo_processado = processar_relatorio_casas_bahia(planilha_renegociacao, nseq)
+            arquivo_processado = processar_relatorio_casas_bahia(planilha_renegociacao, nseq, arquivo_modelo)
             nome_arquivo_saida = "CasasBahia_Report.xlsx"
-            return Response({"error": "Script da Casas Bahia em desenvolvimento."}, status=501)
             
         elif report_type == 'tim':
-            # arquivo_processado = processar_relatorio_tim(planilha_renegociacao, nseq)
+            arquivo_processado = processar_relatorio_tim(planilha_renegociacao, nseq, arquivo_modelo)
             nome_arquivo_saida = "TIM_Report.xlsx"
-            return Response({"error": "Script da TIM em desenvolvimento."}, status=501)
             
         elif report_type == 'claro distrato':
-            # arquivo_processado = processar_relatorio_claro_distrato(planilha_renegociacao, nseq)
+            arquivo_processado = processar_relatorio_claro_distrato(planilha_renegociacao, nseq, arquivo_modelo)
             nome_arquivo_saida = "ClaroDistrato_Report.xlsx"
-            return Response({"error": "Script Claro Distrato em desenvolvimento."}, status=501)
             
         # Aceita com ou sem acento para evitar bugs de digitação no frontend
-        elif report_type in ['claro renovacao', 'claro renovação']:
-            # arquivo_processado = processar_relatorio_claro_renovacao(planilha_renegociacao, nseq)
-            nome_arquivo_saida = "ClaroRenovacao_Report.xlsx"
-            return Response({"error": "Script Claro Renovação em desenvolvimento."}, status=501)
+        elif report_type == 'claro renovacao'
+            arquivo_processado = processar_relatorio_claro_renovacao(planilha_renegociacao, nseq, arquivo_modelo)
+            nome_arquivo_saida = "ClaroRenov_Report.xlsx"
             
         elif report_type == 'diversos':
-            # arquivo_processado = processar_relatorio_diversos(planilha_renegociacao, nseq)
+            # Descomente a importação lá no topo: from scripts.Diversos_RelReneg import processar_relatorio_diversos
+            arquivo_processado = processar_relatorio_diversos(planilha_renegociacao, nseq, arquivo_modelo)
             nome_arquivo_saida = "Diversos_Report.xlsx"
-            return Response({"error": "Script Diversos em desenvolvimento."}, status=501)
             
         else:
             return Response({"error": f"O tipo de relatório '{report_type}' é inválido ou não existe."}, status=400)
