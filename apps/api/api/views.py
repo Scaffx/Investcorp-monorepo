@@ -6,11 +6,11 @@ from rest_framework.response import Response
 
 # 1. Importando os seus scripts (descomente conforme for criando os arquivos .py)
 from .relatorio_bradesco import processar_relatorio_bradesco
-# from .relatorio_casas_bahia import processar_relatorio_casas_bahia
-# from .relatorio_tim import processar_relatorio_tim
-# from .relatorio_claro_distrato import processar_relatorio_claro_distrato
-# from .relatorio_claro_renovacao import processar_relatorio_claro_renovacao
-# from .relatorio_diversos import processar_relatorio_diversos
+from .relatorio_casas_bahia import processar_relatorio_casas_bahia
+from .relatorio_tim import processar_relatorio_tim
+from .relatorio_claro_distrato import processar_relatorio_claro_distrato
+from .relatorio_claro_renovacao import processar_relatorio_claro_renovacao
+from .relatorio_diversos import processar_relatorio_diversos
 
 @api_view(['GET'])
 def health_check(request):
