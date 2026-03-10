@@ -19,6 +19,15 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
+# Cole esta função ANTES da linha que está dando erro:
+def normalize_value(value: str | numbers.Number | None) -> str:
+    if value is None:
+        return ""
+    text = str(value).strip()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return re.sub(r"[^A-Za-z0-9]", "", text).upper()
+
 # =========================
 # CONFIGURAÇÕES DE PASTA (SERVIDOR)
 # =========================
