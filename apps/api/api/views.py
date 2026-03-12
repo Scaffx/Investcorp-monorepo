@@ -64,7 +64,7 @@ def get_excel(request):
             nome_arquivo_saida = "ClaroDistrato_Report.xlsx"
             
         # Aceita com ou sem acento para evitar bugs de digitação no frontend
-        elif report_type == 'claro renovacao'
+        elif report_type == 'claro renovacao':
             arquivo_processado = processar_relatorio_claro_renovacao(planilha_renegociacao, nseq, arquivo_modelo)
             nome_arquivo_saida = "ClaroRenov_Report.xlsx"
             
