@@ -234,7 +234,7 @@ def apply_excel_formatting_buffer(buffer: io.BytesIO, sheet_name: str) -> io.Byt
 
     for cell in ws[1]:
         col_idx = cell.column
-        if 30 &lt;= col_idx &lt;= 36:
+        if 30 <= col_idx <= 36:
             cell.fill = navy_fill
         else:
             cell.fill = red_fill
