@@ -153,7 +153,7 @@ def to_numeric_series(series: pd.Series | None) -> pd.Series | None:
     return pd.to_numeric(series, errors="coerce")
 
 def excel_index_to_letter(index: int) -> str:
-    if index &lt;= 0:
+    if index <= 0:
         raise ValueError("Excel column index must be positive.")
     letters = ""
     while index:
@@ -219,7 +219,7 @@ def apply_excel_formatting_buffer(buffer: io.BytesIO, sheet_name: str) -> io.Byt
         return buffer
         
     ws = wb[sheet_name]
-    if ws.max_row &lt; 1 or ws.max_column &lt; 1:
+    if ws.max_row < 1 or ws.max_column < 1:
         return buffer
     
     ws.freeze_panes = "D2"
