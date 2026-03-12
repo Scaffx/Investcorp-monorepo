@@ -140,7 +140,7 @@ def format_date_ddmmaa(value: object) -> str:
         return ""
     try:
         # Tenta converter para datetime
-        dt = pd.to_datetime(value, errors='coerce')
+        dt = pd.to_datetime(value, errors='coerce', dayfirst=True)
         if pd.isna(dt):
             return str(value)
         # Formata como DD/MM/AA
@@ -251,7 +251,12 @@ def _build_tim_dataframe(modelo_file, relneg_file, allowed_nseqs: Iterable[str])
     rows_a_to_u, v_values, history_values, eb_values = [], [], [], []
     
     # Encontrar as colunas de Vigência no modelo para substituí-las
-    header_row_idx = _find_header_row(modelo) - 1 # 0-indexed
+    header_row_idx = 0
+    for idx, row in modelo.iterrows():
+        if any(str(val).strip().upper() == "CONTRATO" for val in row if pd.notna(val)):
+            header_row_idx = idx
+            break
+            
     headers = [str(col).strip().upper() for col in modelo.iloc[header_row_idx]]
     
     inicio_col_idx = -1
