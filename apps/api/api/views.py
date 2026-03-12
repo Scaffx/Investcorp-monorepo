@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta
 from django.http import HttpResponse
 from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
@@ -44,37 +45,38 @@ def get_excel(request):
             print("ERRO: NSEQ vazio")
             return Response({"error": "Nenhum NSEQ foi informado."}, status=400)
 
-        # ==========================================
+        # =========================
         # ROTEAMENTO (O Maestro)
-        # ==========================================
+        # =========================
         arquivo_processado = None
-        nome_arquivo_saida = "Relatorio_Gerado.xlsx"
+        
+        # Calcula a data de ontem no formato DD_MM_YYYY
+        ontem = datetime.now() - timedelta(days=1)
+        data_ontem_str = ontem.strftime('%d_%m_%Y')
 
         if report_type == 'bradesco':
             arquivo_processado = processar_relatorio_bradesco(planilha_renegociacao, nseq)
-            nome_arquivo_saida = "Bradesco_Report.xlsx"
+            nome_arquivo_saida = f"Bradesco_Report_{data_ontem_str}.xlsx"
             
         elif report_type in ['casas bahia', 'casas_bahia']:
             arquivo_processado = processar_relatorio_casas_bahia(planilha_renegociacao, nseq, arquivo_modelo)
-            nome_arquivo_saida = "CasasBahia_Report.xlsx"
+            nome_arquivo_saida = f"CasasBahia_Report_{data_ontem_str}.xlsx"
             
         elif report_type == 'tim':
             arquivo_processado = processar_relatorio_tim(planilha_renegociacao, nseq, arquivo_modelo)
-            nome_arquivo_saida = "TIM_Report.xlsx"
+            nome_arquivo_saida = f"TIM_Report_{data_ontem_str}.xlsx"
             
-        elif report_type == 'claro distrato':
+        elif report_type in ['claro distrato', 'claro_distrato']:
             arquivo_processado = processar_relatorio_claro_distrato(planilha_renegociacao, nseq, arquivo_modelo)
-            nome_arquivo_saida = "ClaroDistrato_Report.xlsx"
+            nome_arquivo_saida = f"ClaroDistrato_Report_{data_ontem_str}.xlsx"
             
-        # Aceita com ou sem acento para evitar bugs de digitação no frontend
-        elif report_type == 'claro renovacao':
+        elif report_type in ['claro renovacao', 'claro_renovacao']:
             arquivo_processado = processar_relatorio_claro_renovacao(planilha_renegociacao, nseq, arquivo_modelo)
-            nome_arquivo_saida = "ClaroRenov_Report.xlsx"
+            nome_arquivo_saida = f"ClaroRenovacao_Report_{data_ontem_str}.xlsx"
             
         elif report_type == 'diversos':
-            # Descomente a importação lá no topo: from scripts.Diversos_RelReneg import processar_relatorio_diversos
             arquivo_processado = processar_relatorio_diversos(planilha_renegociacao, nseq, arquivo_modelo)
-            nome_arquivo_saida = "Diversos_Report.xlsx"
+            nome_arquivo_saida = f"Diversos_Report_{data_ontem_str}.xlsx"
             
         else:
             return Response({"error": f"O tipo de relatório '{report_type}' é inválido ou não existe."}, status=400)
