@@ -54,7 +54,7 @@ def get_excel(request):
             arquivo_processado = processar_relatorio_bradesco(planilha_renegociacao, nseq)
             nome_arquivo_saida = "Bradesco_Report.xlsx"
             
-        elif report_type == 'casas bahia':
+        elif report_type in ['casas bahia', 'casas_bahia']:
             arquivo_processado = processar_relatorio_casas_bahia(planilha_renegociacao, nseq, arquivo_modelo)
             nome_arquivo_saida = "CasasBahia_Report.xlsx"
             
