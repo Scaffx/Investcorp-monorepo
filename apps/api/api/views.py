@@ -30,7 +30,10 @@ def get_excel(request):
         nseq = request.data.get('nseq', '')
         planilha_renegociacao = request.FILES.get('planilha_renegociacao')
         
-        print(f"Tipo: {report_type} | NSEQ: {nseq} | Planilha: {planilha_renegociacao}")
+        # 👇 ADICIONE ESTA LINHA AQUI PARA CAPTURAR O MODELO 👇
+        arquivo_modelo = request.FILES.get('modelo')
+        
+        print(f"Tipo: {report_type} | NSEQ: {nseq} | Planilha: {planilha_renegociacao} | Modelo: {arquivo_modelo}")
         
         # Validações iniciais
         if not planilha_renegociacao:
